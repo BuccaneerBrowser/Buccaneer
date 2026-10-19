@@ -2,10 +2,10 @@
 
 This tree is the live source for the Fire TV build
 (`com.buccaneer.browser`, versionCode 22 / 2.2).
-Device: Fire TV AFTMM (Android 7.1.2, API 25) at `<device-ip>:5555`.
+Device: Fire TV AFTMM (Android 7.1.2, API 25) at `<DEVICE_IP>:5555`.
 
-Build: `source <android-env>/env.sh && gradle assembleDebug`
-Install: `adb -s <device-ip>:5555 install -r app/build/outputs/apk/debug/app-debug.apk`
+Build: `source <ANDROID_ENV>/env.sh && gradle assembleDebug`
+Install: `adb -s <DEVICE_IP>:5555 install -r app/build/outputs/apk/debug/app-debug.apk`
 Diagnostics: `adb shell "run-as com.buccaneer.browser cat files/diagnostic_session.jsonl"`
 
 ## Current state

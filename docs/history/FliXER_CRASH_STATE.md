@@ -47,7 +47,7 @@ Architecture:
 3. Max ~18 live images at any time.
 
 ## Files
-- Source: <repo-root>
+- Source: <SOURCE_DIR>
 - Key files: MainActivity.kt, popup_guard.js, page_helpers.js, DiagnosticLog.kt
 - New file: flixer_image_guard.js (to be created)
 - Bookmarks: 6 sites (Fmhy, Cinejoy, Movy, Coreflix, MovieBite, Flixer)

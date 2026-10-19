@@ -1,14 +1,14 @@
 # BuccaneerClaude — Flixer Crash Handoff (Oct 7 2026)
 
 ## What this is
-Android TV browser (`com.buccaneer.browser`) at `<repo-root>`.
+Android TV browser (`com.buccaneer.browser`) at `<SOURCE_DIR>`.
 Goal: stop the **Flixer crash** — a SIGSEGV in `KEGLReleaseRenderTarget`
 (PowerVR GPU, `libGLESv2_POWERVR_ROGUE.so`) that fires ~9s after flixer.gd
 loads, during the 182-image TMDB poster intro burst.
 
 ## Device
 Fire TV (AFTMM, Android 7.1.2, API 25, Chromium 118 WebView) at
-`<device-ip>:5555`. adb works.
+`<DEVICE_IP>:5555`. adb works.
 
 ## Tool rules (CRITICAL — follow exactly)
 - Load the skill first: `skill_view(name='buccaneer-patch')` and follow it.
@@ -16,10 +16,10 @@ Fire TV (AFTMM, Android 7.1.2, API 25, Chromium 118 WebView) at
 - Do NOT use terminal to read/write/edit source files.
 - Terminal ONLY for: `gradle build`, `adb install`, `adb logcat`,
   `adb shell run-as`.
-- Build: `source <android-env>/env.sh && cd <repo-root> && gradle assembleDebug`
-- Install: `adb -s <device-ip>:5555 install -r app/build/outputs/apk/debug/app-debug.apk`
+- Build: `source <ANDROID_ENV>/env.sh && cd <SOURCE_DIR> && gradle assembleDebug`
+- Install: `adb -s <DEVICE_IP>:5555 install -r app/build/outputs/apk/debug/app-debug.apk`
 - Diagnostics: `adb shell "run-as com.buccaneer.browser cat files/diagnostic_session.jsonl"`
-- Crash log: `adb -s <device-ip>:5555 shell "logcat -d -b crash | tail -40"`
+- Crash log: `adb -s <DEVICE_IP>:5555 shell "logcat -d -b crash | tail -40"`
 - **Never uninstall** (wipes bookmarks). Don't touch coreflix button code,
   dark mode, or CSS filters. Change one thing, test, report.
 
