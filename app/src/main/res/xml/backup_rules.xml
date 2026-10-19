@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Exclude sensitive data from Android backup -->
+    <exclude domain="sharedpref" path="diagnostics.xml" />
+    <exclude domain="sharedpref" path="crashlog.xml" />
+    <exclude domain="file" path="diagnostic_session.jsonl" />
+</full-backup-content>

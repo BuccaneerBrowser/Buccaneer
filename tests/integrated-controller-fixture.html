@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><style>
+body{margin:0}#menu{position:fixed;left:30px;top:-140px;width:220px;height:1000px;transform:translateY(.123456px)}#playerframe{position:fixed;left:650px;top:100px;width:400px;height:300px;border:2px solid;transform:scale(.5);transform-origin:0 0}
+</style><div id="menu" role="listbox"><div style="height:2000px">Seasons</div></div><iframe id="playerframe"></iframe><pre id="results"></pre>
+<script>window.Buccaneer={currentDocument:()=>"fixture-doc",isDiagnosticsEnabled:()=>false,exclusiveEnabled:()=>false,activeOwner:()=>""};</script>
+<script src="../app/src/main/assets/page_helpers.js"></script><script src="../app/src/main/assets/tv_ui.js"></script>
+<script>
+(async()=>{const checks=[];function check(name,v){checks.push({name,pass:!!v});if(!v)throw Error(name)}
+try{
+const menu=document.getElementById('menu');__tvUi.fitMenus();__tvUi.restoreMenus();check('real Chromium restores canonicalized fractional menu CSS',menu.style.marginTop===''&&menu.style.maxHeight==='');
+const frame=document.getElementById('playerframe');frame.srcdoc='<style>body{margin:0}#p{position:absolute;left:0;top:0}video{position:absolute;left:20px;top:30px;width:300px;height:200px}#seek{position:absolute;left:0;top:250px;width:400px;height:20px}</style><div id="p"><video></video><div id="seek" role="slider" aria-label="Seek"></div></div>';
+await new Promise(r=>frame.onload=r);const video=frame.contentDocument.querySelector('video');let time=10,reject=false,requests=0;
+Object.defineProperties(video,{duration:{get:()=>100},currentTime:{get:()=>time,set:v=>{if(!reject)time=v}},paused:{get:()=>true},ended:{get:()=>false},videoHeight:{get:()=>720}});
+frame.focus();check('real focused iframe retains exposed video state',JSON.parse(__fb.state()).f===1);
+const r=frame.getBoundingClientRect(),sx=r.width/frame.offsetWidth,sy=r.height/frame.offsetHeight;
+let center=JSON.parse(__fb.frameCenter());check('nested video center uses top document coordinates',Math.abs(center.x*innerWidth-(r.left+(frame.clientLeft+170)*sx))<1&&Math.abs(center.y*innerHeight-(r.top+(frame.clientTop+130)*sy))<1);
+__fb.selectAt((r.left+20)/innerWidth,(r.top+20)/innerHeight);frame.blur();check('selected nested player stays attached across iframe blur',JSON.parse(__fb.state()).f===1);
+frame.requestFullscreen=()=>{requests++;return Promise.resolve()};check('fullscreen overlay is prepared',__fb.prepareFullscreen()==='ok');const old=document.getElementById('__fb_fs_overlay');__fb.cancelFullscreen();check('fullscreen cancellation removes its input-blocking overlay',!document.getElementById('__fb_fs_overlay'));old.dispatchEvent(new MouseEvent('pointerup',{bubbles:true}));check('retained cancelled overlay cannot request fullscreen',requests===0);
+__fb.prepareFullscreen();const live=document.getElementById('__fb_fs_overlay');old.dispatchEvent(new MouseEvent('pointerup',{bubbles:true}));check('old overlay cannot activate a replacement request',requests===0);live.dispatchEvent(new MouseEvent('pointerup',{bubbles:true}));live.dispatchEvent(new MouseEvent('click',{bubbles:true}));check('one live overlay creates exactly one fullscreen request',requests===1);__fb.cancelFullscreen();
+const text=await(await fetch('../app/src/main/assets/seek_click.js')).text(),repair=(0,eval)(text);
+const px=r.left+(frame.clientLeft+100)*sx,py=r.top+(frame.clientTop+260)*sy;
+check('real transformed iframe track is recognized',repair(px/innerWidth,py/innerHeight,'probe')==='track');check('transformed timeline selects intended quarter position',repair(px/innerWidth,py/innerHeight)==='seeked'&&time===25);
+reject=true;time=0;check('actual DOM media setter rejection is not false success',repair(px/innerWidth,py/innerHeight)==='none'&&time===0);
+}catch(e){checks.push({name:String(e),pass:false})}document.getElementById('results').textContent=JSON.stringify(checks)})();
+</script>

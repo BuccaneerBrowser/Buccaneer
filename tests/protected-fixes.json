@@ -1,0 +1,32 @@
+[
+  {
+    "path": "app/src/main/assets/flixer_image_guard.js",
+    "sha256": "147f8bcd54cdd92e3b0d63c25ded876efb329518e0f15db4360f87c89883e179"
+  },
+  {
+    "path": "app/src/main/assets/popup_guard.js",
+    "sha256": "9a3396113202130655ee5b444708e15d39afbc0abafc3b17af9003e456fb0823"
+  },
+  {
+    "path": "app/src/main/assets/page_helpers.js",
+    "before": "  function diagnostic(event, data) {",
+    "sha256": "bdec07fd6e87cf473299ec27e88a8be9f2e9ac215703f2e2ff87dec65a587fd5"
+  },
+  {
+    "path": "app/src/main/assets/page_helpers.js",
+    "after": "  document.addEventListener('loadedmetadata'",
+    "sha256": "afb7c01661f8a417c11cf05da9897fd59ec84fded9cea5bab4cd02049186ea0f"
+  },
+  {
+    "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
+    "after": "    private fun applyDarkMode()",
+    "before": "    private fun toggleDark()",
+    "sha256": "1f1b2c3d186b636281cedd55b7f69d606ebfa21e543944445e6e836a0231af90"
+  },
+  {
+    "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
+    "after": "            // Detect flixer page:",
+    "before": "        @TargetApi(Build.VERSION_CODES.M)",
+    "sha256": "30a73cd86bf54f6e457fd2b9fcb41b36d6fc57bcf674f3191ba4941128ae754e"
+  }
+]
