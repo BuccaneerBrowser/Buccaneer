@@ -21,7 +21,7 @@ const val MATCH: Int = ViewGroup.LayoutParams.MATCH_PARENT
 const val WRAP: Int = ViewGroup.LayoutParams.WRAP_CONTENT
 
 object Colors {
-    val BG: Int = Color.parseColor("#FF08162E")
+    val BG: Int = Color.parseColor("#FF1B1D21")
     val PANEL: Int = Color.parseColor("#F20B1D3A")
     val DIM: Int = Color.parseColor("#99000000")
     val BUTTON: Int = Color.parseColor("#FF1C3358")
@@ -56,11 +56,14 @@ class Ui(private val context: Context) {
     }
 
     /** Background for remote-focusable things: blue + white outline when focused/pressed. */
-    fun focusBg(): StateListDrawable {
+    fun focusBg(): StateListDrawable = focusBg(Colors.BUTTON)
+
+    /** Background with a custom unfocused fill color (for tinted tiles). */
+    fun focusBg(unfocused: Int): StateListDrawable {
         val sl = StateListDrawable()
         sl.addState(intArrayOf(android.R.attr.state_focused), rounded(Colors.ACCENT, Colors.GOLD, u(3)))
         sl.addState(intArrayOf(android.R.attr.state_pressed), rounded(Colors.ACCENT, Colors.GOLD, u(3)))
-        sl.addState(intArrayOf(), rounded(Colors.BUTTON))
+        sl.addState(intArrayOf(), rounded(unfocused))
         return sl
     }
 
@@ -86,7 +89,7 @@ class Ui(private val context: Context) {
         b.text = label
         b.setAllCaps(false)
         b.setTextSize(TypedValue.COMPLEX_UNIT_PX, u(sizeU).toFloat())
-        b.setTextColor(Colors.WHITE)
+        b.setTextColor(Colors.SUBTLE)
         b.background = focusBg()
         b.stateListAnimator = null
         b.isFocusable = true
@@ -112,13 +115,14 @@ class Ui(private val context: Context) {
         secondary: String,
         primarySize: Int = 18,
         secondarySize: Int = 12,
-        center: Boolean = true
+        center: Boolean = true,
+        tint: Int = 0
     ): LinearLayout {
         val box = LinearLayout(context)
         box.orientation = LinearLayout.VERTICAL
         box.gravity = if (center) Gravity.CENTER else (Gravity.START or Gravity.CENTER_VERTICAL)
         box.setPadding(u(10), u(6), u(10), u(6))
-        box.background = focusBg()
+        box.background = if (tint != 0) focusBg(tint) else focusBg()
         box.isFocusable = true
         box.isClickable = true
 

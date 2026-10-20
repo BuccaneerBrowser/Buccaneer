@@ -88,7 +88,7 @@ fun formatTime(totalSeconds: Double): String {
 /**
  * Fire TV browser. Everything is operated with the remote:
  *
- *  - Start page: top 8 bookmarks (or top 8 folders) as buttons; D-pad moves, Select opens.
+ *  - Start page: top 10 bookmarks (or top 10 folders) as buttons; D-pad moves, Select opens.
  *  - Browsing: D-pad moves an on-screen pointer, Select clicks, pointer at the screen edge scrolls.
  *  - Keypad: Menu > Address/search, or tap a text field, or hold Select.
  *  - Video: Play/Pause, Rew/FF and volume keys control the page's video; full screen has its own keys.

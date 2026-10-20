@@ -1,6 +1,7 @@
 package com.buccaneer.browser
 
 import android.content.Context
+import android.graphics.Color
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
@@ -10,11 +11,11 @@ import android.widget.LinearLayout
 /**
  * The page shown when the browser starts (and from Menu > Start page).
  *
- *  - Eight bookmarks/folders at a time, with paging arrows above the bottom actions.
+ *  - Ten bookmarks/folders at a time (2 rows of 5), with paging arrows above the bottom actions.
  *  - Folder contents are paged independently; Back returns to the original folder-list page.
  *
  * It is a native screen, so the remote's D-pad moves between the buttons and Select opens one.
- * "Top 8" means the first 8 in your list; reorder them from Menu > Bookmarks > Options.
+ * "Top 10" means the first 10 in your list; reorder them from Menu > Bookmarks > Options.
  */
 class StartPage @JvmOverloads constructor(
     context: Context,
@@ -29,6 +30,16 @@ class StartPage @JvmOverloads constructor(
     }
 
     var listener: Listener? = null
+
+    /** The running version, read live from the package (always matches the installed build). */
+    private val versionLabel: String by lazy {
+        try {
+            val p = context.packageManager.getPackageInfo(context.packageName, 0)
+            p.versionName ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
 
     /** null = top level; otherwise the folder being shown ("" = Unsorted). */
     private var folder: String? = null
@@ -99,23 +110,22 @@ class StartPage @JvmOverloads constructor(
         header.orientation = LinearLayout.HORIZONTAL
         header.gravity = Gravity.CENTER_VERTICAL
 
+        val tagLeft = ui.text("Where's me buccaneers?", 15, Colors.SUBTLE)
+        header.addView(tagLeft, LinearLayout.LayoutParams(WRAP, WRAP))
+
         val logo = ImageView(context)
         logo.setImageResource(R.drawable.buccaneer_logo)
         logo.scaleType = ImageView.ScaleType.FIT_CENTER
-        header.addView(logo, LinearLayout.LayoutParams(ui.u(56), ui.u(56)))
+        val lslp = LinearLayout.LayoutParams(ui.u(36), ui.u(36))
+        lslp.leftMargin = ui.u(10)
+        header.addView(logo, lslp)
 
-        val title = ui.text("Buccaneer", 40, Colors.WHITE, true)
-        val tlp = LinearLayout.LayoutParams(WRAP, WRAP)
-        tlp.leftMargin = ui.u(14)
-        header.addView(title, tlp)
+        val tagRight = ui.text("Under me bucc'n hat!", 15, Colors.SUBTLE)
+        val trlp = LinearLayout.LayoutParams(WRAP, WRAP)
+        trlp.leftMargin = ui.u(10)
+        header.addView(tagRight, trlp)
 
         content.addView(header, LinearLayout.LayoutParams(WRAP, WRAP))
-
-        val tagline = ui.text("Where's me buccaneers?  —  Under me bucc'n hat!", 15, Colors.SUBTLE)
-        tagline.gravity = Gravity.CENTER_HORIZONTAL
-        val tglp = LinearLayout.LayoutParams(WRAP, WRAP)
-        tglp.topMargin = ui.u(10)
-        content.addView(tagline, tglp)
 
         val f = folder
         val tiles = ArrayList<View>()
@@ -227,12 +237,18 @@ class StartPage @JvmOverloads constructor(
         val hlp = LinearLayout.LayoutParams(WRAP, WRAP)
         hlp.topMargin = ui.u(16)
         content.addView(hint, hlp)
+
+        val version = ui.text("Buccaneer $versionLabel", 13, Colors.MUTED)
+        version.gravity = Gravity.CENTER_HORIZONTAL
+        val vlp = LinearLayout.LayoutParams(WRAP, WRAP)
+        vlp.topMargin = ui.u(6)
+        content.addView(version, vlp)
     }
 
     private fun addGrid(tiles: List<View>, reserveTwoRows: Boolean) {
-        val cols = 4
-        val gap = ui.u(14)
-        val tileW = Math.min(ui.u(210), (ui.screenW - ui.u(80) - gap * (cols - 1)) / cols)
+        val cols = 5
+        val gap = ui.u(12)
+        val tileW = Math.min(ui.u(190), (ui.screenW - ui.u(80) - gap * (cols - 1)) / cols)
         val tileH = ui.u(104)
         val rows = if (reserveTwoRows) 2 else (tiles.size + cols - 1) / cols
         for (rowIndex in 0 until rows) {
@@ -278,7 +294,7 @@ class StartPage @JvmOverloads constructor(
     }
 
     companion object {
-        private const val MAX_TILES = 8
+        private const val MAX_TILES = 10
         private fun lastPage(total: Int): Int = if (total <= 0) 0 else (total - 1) / MAX_TILES
     }
 }

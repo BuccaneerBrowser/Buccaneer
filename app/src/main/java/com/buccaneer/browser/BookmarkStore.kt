@@ -13,7 +13,7 @@ data class Bookmark(val title: String, val url: String, val folder: String)
 data class FolderInfo(val name: String, val count: Int)
 
 /**
- * Bookmarks live in one ordered list. "Top 8" on the start page simply means the first 8 entries
+ * Bookmarks live in one ordered list. "Top 10" on the start page simply means the first 10 entries
  * of that list (or the first 8 folders), and the Bookmarks screen has Move up / Move to top
  * so you decide what is on top.
  *

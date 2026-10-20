@@ -974,7 +974,13 @@
 
   // Auto-hide the player's controls in full screen (CineJoy and similar): synthetic pointer
   // activity on the video, driven by the player's own idle logic. Not installed on flixer.
-  installControlsAutoHide();
+  //
+  // YouTube (and other show-on-activity players) do the OPPOSITE of hide-on-idle: any pointer
+  // activity re-shows the controls, which then hide after ~3 s. Our 1.5 s mousemove fires before
+  // that hide timer expires, so it perpetually re-wakes YouTube's controls — they never stay
+  // hidden. So we skip the synthetic poke on YouTube and let its own idle logic do the hiding.
+  var __isYouTube = /(^|\.)youtube\.com$|(^|\.)youtu\.be$/.test(__host);
+  if (!__isYouTube) installControlsAutoHide();
 
   // StreamCorner: remove sandbox attribute from player iframes BEFORE they load.
   // The player checks its security context and refuses to play if sandboxed.
@@ -995,6 +1001,14 @@
       if (tagName && tagName.toLowerCase() === 'iframe') {
         // Remove sandbox attribute immediately
         el.removeAttribute('sandbox');
+        // Ensure the iframe is allowed to go fullscreen (element API requires this
+        // permission for cross-origin frames; without it the player's fullscreen
+        // button is a no-op).
+        el.setAttribute('allowfullscreen', 'allowfullscreen');
+        var allow = el.getAttribute('allow') || '';
+        if (allow.indexOf('fullscreen') === -1) {
+          el.setAttribute('allow', (allow ? allow + ', ' : '') + 'fullscreen');
+        }
         if (diagnosticEnabled) {
           diagnostic('sandbox_removed_early', { url: window.location.href || '' });
         }
@@ -1002,14 +1016,24 @@
       return el;
     };
     
-    // Also check existing iframes and remove sandbox
+    // Also check existing iframes and remove sandbox / ensure fullscreen permission
     function removeSandboxFromIframes() {
-      var iframes = document.querySelectorAll('iframe[sandbox]');
+      var iframes = document.querySelectorAll('iframe[sandbox], iframe:not([allowfullscreen])');
       for (var i = 0; i < iframes.length; i++) {
-        iframes[i].removeAttribute('sandbox');
+        var f = iframes[i];
+        if (f.hasAttribute('sandbox')) {
+          f.removeAttribute('sandbox');
+        }
+        if (!f.hasAttribute('allowfullscreen')) {
+          f.setAttribute('allowfullscreen', 'allowfullscreen');
+        }
+        var allow = f.getAttribute('allow') || '';
+        if (allow.indexOf('fullscreen') === -1) {
+          f.setAttribute('allow', (allow ? allow + ', ' : '') + 'fullscreen');
+        }
         if (diagnosticEnabled) {
           diagnostic('sandbox_removed', { 
-            iframeSrc: (iframes[i].src || '').substring(0, 100),
+            iframeSrc: (f.src || '').substring(0, 100),
             url: window.location.href || ''
           });
         }
@@ -1471,7 +1495,21 @@
     }
     setTimeout(function () {
       try {
-        if (editableOf(document.activeElement) && window.Buccaneer &&
+        var ae = document.activeElement;
+        var ed = editableOf(ae);
+        // Only open the keypad when the tap actually landed on the field itself.
+        // Otherwise a tap on the player/video area can leave a chat box focused as a
+        // side effect and pop the keypad unexpectedly (StreamCorner chat, etc.).
+        var onField = false;
+        if (ed && e.target) {
+          onField = (e.target === ed) || (ed.contains && ed.contains(e.target));
+          // A label or wrapper around the field also counts as a deliberate tap on it.
+          if (!onField && e.target.closest) {
+            var lab = e.target.closest('label');
+            if (lab && lab.contains && lab.contains(ed)) onField = true;
+          }
+        }
+        if (ed && onField && window.Buccaneer &&
             typeof window.Buccaneer.editableClicked === 'function') {
           window.Buccaneer.editableClickedForDocument(documentId);
         }
