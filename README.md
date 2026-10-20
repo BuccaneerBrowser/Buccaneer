@@ -1,4 +1,4 @@
-# Buccaneer 2.2
+# Buccaneer 2.3.1
 
 A lightweight web browser for Android TV, designed for remote control navigation and streaming content.
 
@@ -58,10 +58,10 @@ The repo includes a GitHub Actions workflow (`.github/workflows/build.yml`) that
    - `BUCCANEER_KEYSTORE_PASSWORD` — keystore password
    - `BUCCANEER_KEY_PASSWORD` — key password
 
-3. Tag a release:
+3. Tag a release (replace `vX.Y.Z` with the new version):
    ```sh
-   git tag v2.3
-   git push origin v2.3
+   git tag vX.Y.Z
+   git push origin vX.Y.Z
    ```
 
 The workflow will build the signed APK and create a GitHub Release automatically.
