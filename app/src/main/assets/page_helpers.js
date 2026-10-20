@@ -181,11 +181,131 @@
     return 'none';
   }
 
-  function withVideo(fn) {
+  // ------------------------------------------------------------------ cross-frame video commands
+  //
+  // The app can only script the top frame, but this helper runs in every frame. When the
+  // player's video lives in a frame from another site, the top frame forwards the command to
+  // that frame's copy of this helper, which runs it on its own video and answers back. That
+  // is how Play/Pause and FF/Rewind reach players we cannot script directly — in full screen
+  // as well as normal.
+  var frameCmdSeq = 0;
+  var lastFrameState = null; // { at: ms, state: {...} } — newest state a player frame reported
+
+  function frameIsFlixer(frame) {
+    try { return /(^|\.)flixer\.(gd|su)$/.test(((frame.src || '').split('/')[2] || '').toLowerCase()); } catch (e) { return false; }
+  }
+
+  function forwardToFrame(frame, cmd, arg) {
+    try {
+      frameCmdSeq++;
+      frame.contentWindow.postMessage({ __fbCmd: 1, id: frameCmdSeq, cmd: cmd, arg: arg }, '*');
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // Run a video command on one <video>. Returns 'ok' | 'failed'.
+  function runOnVideo(v, cmd, arg) {
+    switch (cmd) {
+      case 'togglePlay':
+        if (v.paused || v.ended) safePlay(v); else { cancelPlayAttempt(); v.pause(); }
+        return 'ok';
+      case 'play':
+        safePlay(v);
+        return 'ok';
+      case 'pause':
+        cancelPlayAttempt();
+        var all = []; collect(document, 2, all);
+        for (var i = 0; i < all.length; i++) { try { all[i].pause(); } catch (e) { /* ignore */ } }
+        return all.length ? 'ok' : 'none';
+      case 'seek':
+        if (!isFinite(arg) || !isFinite(v.currentTime)) return 'failed';
+        var wanted = Math.max(0, v.currentTime + arg);
+        if (isFinite(v.duration)) wanted = Math.min(v.duration, wanted);
+        var ranges = v.seekable;
+        if (ranges && ranges.length) {
+          var inside = false, nearest = 0, distance = Infinity;
+          for (var j = 0; j < ranges.length; j++) {
+            var a = ranges.start(j), b = ranges.end(j);
+            if (wanted >= a && wanted <= b) { inside = true; break; }
+            var edge = wanted < a ? a : b, dm = Math.abs(edge - wanted);
+            if (dm < distance) { distance = dm; nearest = edge; }
+          }
+          if (!inside) wanted = nearest;
+        }
+        v.currentTime = wanted;
+        return Math.abs(v.currentTime - wanted) <= 1 ? 'ok' : 'failed';
+      case 'volume':
+        v.muted = false;
+        v.volume = Math.max(0, Math.min(1, Math.round((v.volume + arg) * 100) / 100));
+        return 'ok';
+      case 'toggleMute':
+        v.muted = !v.muted;
+        return 'ok';
+      case 'unmute':
+        var done = 0, vids = document.getElementsByTagName('video');
+        for (var k = 0; k < vids.length; k++) { try { if (vids[k].muted) { vids[k].muted = false; done++; } } catch (e) { /* ignore */ } }
+        return done > 0 ? 'ok' : 'none';
+      default:
+        return 'failed';
+    }
+  }
+
+  // Run a command on this frame's own video (called by the message listener below).
+  function frameCmd(cmd, arg) {
     var t = pickTarget();
     if (!t) return 'none';
     if (t.video) {
-      try { return fn(t.video) === false ? 'failed' : 'ok'; } catch (e) { return 'failed'; }
+      try { return runOnVideo(t.video, cmd, arg); } catch (e) { return 'failed'; }
+    }
+    if (t.frame) {
+      // The video sits in a nested frame: hand the command one level down.
+      return forwardToFrame(t.frame, cmd, arg) ? 'frame' : 'none';
+    }
+    return 'none';
+  }
+
+  window.addEventListener('message', function (e) {
+    var m = e.data;
+    if (!m) return;
+    if (m.__fbRes === 1) {
+      // A player frame answered one of our commands: keep its reported state fresh.
+      if (m.state && typeof m.state === 'object') lastFrameState = { at: Date.now(), state: m.state };
+      return;
+    }
+    if (m.__fbCmd !== 1) return;
+    // Accept commands only from an ancestor frame (the top frame), never from sibling pages.
+    var fromAncestor = false;
+    try {
+      var w = parent, depth = 0;
+      while (w && w !== window && depth < 6) {
+        if (e.source === w) { fromAncestor = true; break; }
+        w = w.parent; depth++;
+      }
+    } catch (x) { /* ignore */ }
+    if (!fromAncestor) return;
+    var reply = function (result) {
+      try {
+        var st = null;
+        try { st = JSON.parse(window.__fb.state()); } catch (x) { /* ignore */ }
+        parent.postMessage({ __fbRes: 1, id: m.id, result: result, state: st }, '*');
+      } catch (x) { /* ignore */ }
+    };
+    try { reply(frameCmd(m.cmd, m.arg)); } catch (err) { reply('failed'); }
+  });
+
+  // Run a video command on the current target. The video may be in this document (or a
+  // same-origin frame) — then we drive it directly — or in a frame from another site, whose
+  // own copy of this helper receives the command by message.
+  // Returns 'ok' | 'failed' | 'frame' (forwarded to a player frame) | 'none'.
+  function videoOp(cmd, arg) {
+    var t = pickTarget();
+    if (!t) return 'none';
+    if (t.video) {
+      try { return runOnVideo(t.video, cmd, arg); } catch (e) { return 'failed'; }
+    }
+    if (t.frame) {
+      // Flixer keeps the app's trusted-tap path: its player must be started by a real touch.
+      if (!frameIsFlixer(t.frame) && forwardToFrame(t.frame, cmd, arg)) return 'frame';
     }
     return 'frame';
   }
@@ -359,13 +479,11 @@
       return diagnosticEnabled ? 1 : 0;
     },
     togglePlay: function () {
-      return withVideo(function (v) {
-        if (v.paused || v.ended) safePlay(v); else {cancelPlayAttempt();v.pause();}
-      });
+      return videoOp('togglePlay');
     },
 
     play: function () {
-      return withVideo(function (v) { safePlay(v); });
+      return videoOp('play');
     },
 
     // 1 if the browser refused a play() in the last second and a tap on the player is needed
@@ -382,39 +500,21 @@
       for (var i = 0; i < all.length; i++) {
         try { all[i].pause(); } catch (e) { /* ignore */ }
       }
-      return all.length ? 'ok' : (bigFrame() ? 'frame' : 'none');
+      var f = bigFrame();
+      if (f && !frameIsFlixer(f) && forwardToFrame(f, 'pause')) return 'ok';
+      return all.length ? 'ok' : (f ? 'frame' : 'none');
     },
 
     seek: function (delta) {
-      return withVideo(function (v) {
-        if (!isFinite(delta) || !isFinite(v.currentTime)) return false;
-        var wanted=Math.max(0,v.currentTime+delta);
-        if(isFinite(v.duration)) wanted=Math.min(v.duration,wanted);
-        var ranges=v.seekable;
-        if(ranges && ranges.length){
-          var inside=false,nearest=0,distance=Infinity;
-          for(var i=0;i<ranges.length;i++){
-            var a=ranges.start(i),b=ranges.end(i);
-            if(wanted>=a && wanted<=b){inside=true;break;}
-            var edge=wanted<a?a:b,d=Math.abs(edge-wanted);
-            if(d<distance){distance=d;nearest=edge;}
-          }
-          if(!inside)wanted=nearest;
-        }
-        v.currentTime=wanted;
-        return Math.abs(v.currentTime-wanted)<=1;
-      });
+      return videoOp('seek', delta);
     },
 
     volume: function (delta) {
-      return withVideo(function (v) {
-        v.muted = false;
-        v.volume = Math.max(0, Math.min(1, Math.round((v.volume + delta) * 100) / 100));
-      });
+      return videoOp('volume', delta);
     },
 
     toggleMute: function () {
-      return withVideo(function (v) { v.muted = !v.muted; });
+      return videoOp('toggleMute');
     },
 
     // Force-unmute: the player's own UI may be broken (e.g. a cross-origin frame whose control
@@ -427,7 +527,10 @@
           if (vids[i].muted) { vids[i].muted = false; done++; }
         } catch (e) { /* cross-origin or detached */ }
       }
-      return done > 0 ? 'ok' : 'none';
+      if (done > 0) return 'ok';
+      var t = pickTarget();
+      if (t && t.frame && !frameIsFlixer(t.frame) && forwardToFrame(t.frame, 'unmute')) return 'frame';
+      return 'none';
     },
 
     // Where the player's mute button is, as a fraction of the screen: the last button in the
@@ -681,7 +784,13 @@
 
     state: function () {
       var t = pickTarget();
-      if (!t || !t.video) return JSON.stringify({ f: 0, fr: (t && t.frame) ? 1 : 0 });
+      if (!t || !t.video) {
+        // The player lives in another site's frame: report the state its helper last sent back.
+        if (t && t.frame && lastFrameState && Date.now() - lastFrameState.at < 10000) {
+          return JSON.stringify(lastFrameState.state);
+        }
+        return JSON.stringify({ f: 0, fr: (t && t.frame) ? 1 : 0 });
+      }
       var v = t.video;
       return JSON.stringify({
         f: 1,

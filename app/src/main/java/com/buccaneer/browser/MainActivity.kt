@@ -1890,7 +1890,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     eval("window.__fb ? __fb.unmute() : 'none'") { raw ->
                         if (!current()) return@eval
                         when (jsString(raw)) {
-                            "ok" -> refreshOsd(1500, "Unmuted")
+                            "ok", "frame" -> refreshOsd(1500, "Unmuted")
                             "none" -> {
                                 // The video is in a frame we cannot script: tap the player's
                                 // mute button, as a finger would.
@@ -2262,7 +2262,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
 
     /**
      * Runs a page_helpers.js video command. It answers "ok", "frame" (the player lives in a
-     * cross-site frame we cannot script, so we send it the matching keyboard key instead) or "none".
+     * frame from another site; that frame's own copy of the helper ran the command — except on
+     * Flixer, which keeps the trusted-tap path), or "none" (no player found; send the key).
      */
     private fun videoCommand(call: String, fallbackKey: Int, tapFrame: Boolean = false) {
         cancelPlayerWork()
@@ -2272,11 +2273,11 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (!foreground || intent != playerIntent || target !== (customView ?: webView)) return@eval
             when (jsString(raw)) {
                 "ok" -> if (tapFrame) postForPage(350) { if (intent == playerIntent && target === (customView ?: webView)) retryIfPlayRefused() }
-                "frame" -> if (tapFrame && fallbackKey == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-                    // A touch may only reveal player controls. Use a trusted mouse click for
-                    // Flixer remote playback. All other sites retain the original touch path.
-                    tapPlayerFrame(mouse = onFlixerPage)
-                } else sendKeyToPage(fallbackKey)
+                "frame" -> if (tapFrame && fallbackKey == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && onFlixerPage) {
+                    // Flixer's player frame is not scripted: a real tap starts and toggles it.
+                    tapPlayerFrame(mouse = true)
+                }
+                // "frame" on any other site: the frame's own helper already ran the command.
                 "none", null -> sendKeyToPage(fallbackKey)
                 else -> sendKeyToPage(fallbackKey)
             }
@@ -2344,8 +2345,10 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         queuedSeek = (queuedSeek + seconds - amount).coerceIn(-120, 120)
         eval("window.__fb ? __fb.seek($amount) : 'none'") { raw ->
             if (!valid()) return@eval
-            if (jsString(raw) == "ok") { refreshOsd(150, "Hold FF/Rewind: larger skips"); finish() }
-            else {
+            if (jsString(raw) == "ok" || jsString(raw) == "frame") {
+                // "frame": the player frame's own helper ran the seek.
+                refreshOsd(150, "Hold FF/Rewind: larger skips"); finish()
+            } else {
                 // Focus the selected iframe without a center click that might toggle playback.
                 eval("window.__fb && __fb.focusTarget ? __fb.focusTarget() : 'none'") focus@{
                     if (!valid()) return@focus
@@ -2565,7 +2568,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     eval("window.__fb ? __fb.unmute() : 'none'") { raw ->
                         if (!current()) return@eval
                         when (jsString(raw)) {
-                            "ok" -> refreshOsd(1500, "Unmuted")
+                            "ok", "frame" -> refreshOsd(1500, "Unmuted")
                             "none" -> {
                                 eval("window.__fb ? __fb.muteButton() : ''") mute@{ mb ->
                                     if (!current()) return@mute
@@ -2858,8 +2861,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             now, now, action, keyCode, 0, meta,
             KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD
         )
-        val target: View = customView ?: webView
-        target.dispatchKeyEvent(ev)
+        // The page always lives in the WebView. In full screen the custom view is only the
+        // video's rendering surface — keys sent to it never reach the page.
+        webView.dispatchKeyEvent(ev)
     }
 
     private fun pressKey(keyCode: Int, meta: Int) {
