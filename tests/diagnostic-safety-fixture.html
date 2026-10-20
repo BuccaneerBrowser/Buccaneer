@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><style>video{width:400px;height:220px}</style><video></video><canvas></canvas><pre id="results"></pre>
+<script>
+window.__contextRequests=[];window.__diagnosticEvents=[];
+HTMLCanvasElement.prototype.getContext=function(type){__contextRequests.push(type);return null;};
+window.logging=false;window.Buccaneer={isDiagnosticsEnabled:()=>window.logging,exclusiveEnabled:()=>false,activeOwner:()=>'',diagnosticEvent:(name,data)=>__diagnosticEvents.push(name)};
+</script>
+<script src="../app/src/main/assets/page_helpers.js"></script>
+<script>
+const results=[];function check(name,pass){results.push({name,pass:!!pass})}
+const video=document.querySelector('video');video.dispatchEvent(new Event('loadedmetadata'));
+check('logging off does not query page canvas contexts',__contextRequests.length===0);
+check('logging off emits no media diagnostics',__diagnosticEvents.length===0);
+// The native bridge is authoritative when media events refresh diagnostic state.
+window.logging=true;__fb.setDiagnosticLogging(true);video.dispatchEvent(new Event('playing'));
+check('logging on still does not query page canvas contexts',__contextRequests.length===0);
+check('logging on records media event',__diagnosticEvents.includes('media_playing'));
+check('player geometry diagnostic calls the public helper',__diagnosticEvents.includes('player_geometry'));
+document.getElementById('results').textContent=JSON.stringify(results);
+</script>

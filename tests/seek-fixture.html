@@ -1,0 +1,24 @@
+<!doctype html><meta charset="utf-8"><style>
+body{margin:0}#player{position:absolute;left:100px;top:100px;width:800px;height:500px}video{width:800px;height:450px}#seek{position:absolute;left:0;top:450px;width:800px;height:20px;background:#ccc}#seek span{display:block;width:100%;height:100%}#volume{position:absolute;top:480px;left:0;width:200px;height:10px}button{position:absolute;left:820px;top:450px}
+</style><div id="player"><video></video><div id="seek" role="slider" aria-label="Seek"><span></span></div><input id="volume" type="range" aria-label="Volume"><button>Play</button></div><pre id="results"></pre>
+<script>
+(async function(){
+const results=[];function check(name,pass){results.push({name,pass:!!pass});if(!pass)throw Error(name)}
+try{
+const text=await(await fetch('../app/src/main/assets/seek_click.js')).text();const repair=(0,eval)(text);
+const v=document.querySelector('video');let current=10,writes=0,duration=1800;
+Object.defineProperties(v,{duration:{get:()=>duration},currentTime:{get:()=>current,set:x=>{current=x;writes++}},seekable:{get:()=>({length:0})}});
+let r=document.getElementById('seek').getBoundingClientRect();
+function at(x,y){return repair(x/innerWidth,y/innerHeight)}
+check('actual DOM seek track and child detected',at(r.left+r.width*.75,r.top+10)==='seeked');
+check('seek maps clicked fraction to duration',current===1350);
+const count=writes;at(r.left+r.width*.75,r.top+10);check('completed native seek is not duplicated',writes===count);
+r=document.getElementById('volume').getBoundingClientRect();check('volume slider is not treated as seek',at(r.left+50,r.top+5)==='none'&&current===1350);
+r=document.querySelector('button').getBoundingClientRect();check('play button is not treated as seek',at(r.left+10,r.top+5)==='none'&&current===1350);
+check('background is not treated as seek',at(50,50)==='none');
+r=document.getElementById('seek').getBoundingClientRect();duration=Infinity;check('unknown or live duration is not guessed',at(r.left+100,r.top+10)==='none');duration=1800;
+const other=document.createElement('video');document.getElementById('player').append(other);check('ambiguous multiple players are not guessed',at(r.left+100,r.top+10)==='none');other.remove();
+document.getElementById('seek').style.direction='rtl';at(r.left+r.width*.25,r.top+10);check('RTL seek mapping uses reversed fraction',current===1350);
+}catch(e){results.push({name:String(e),pass:false})}document.getElementById('results').textContent=JSON.stringify(results);
+})();
+</script>
