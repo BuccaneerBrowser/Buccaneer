@@ -88,12 +88,22 @@
       // Validate before any action. Never fall back after an action might have executed.
       try{
         if(action==='submit'){
-          // Let SPA/React Enter handlers consume the key before implicit form submission.
+          // SUBMIT DESIGN — read before changing (this path regresses silently and often):
+          // The page can ONLY ever see synthetic (isTrusted===false) Enter events; the app
+          // turns the remote's Select key into these, so a page's own Enter handler can never
+          // be relied on to run the search. React/SPA handlers frequently call preventDefault()
+          // on the synthetic key (proceed=false) WITHOUT performing the search. Therefore the
+          // form submission below is the PRIMARY, reliable action — it must NOT be gated on
+          // `proceed`. Gating it on `proceed` (the old `form && proceed`) is exactly the bug
+          // where "I can type but Enter doesn't search": the page eats the key, we skip the
+          // form submit, and nothing happens. Form submit serializes the live DOM values,
+          // which are correct because typing updates them. Only formless widgets fall back to
+          // best-effort key dispatch.
           var eventOptions={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
           var proceed=el.dispatchEvent(new KeyboardEvent('keydown',eventOptions));
           if(proceed)proceed=el.dispatchEvent(new KeyboardEvent('keypress',eventOptions));
           var form=el.form;
-          if(form && proceed){
+          if(form){
             var submitter=null;
             for(var si=0;si<form.elements.length;si++){
               var candidate=form.elements[si];
@@ -110,7 +120,7 @@
             el.dispatchEvent(new KeyboardEvent('keyup',eventOptions));
             return JSON.stringify({status:'submitted'});
           }
-          // No raw form.submit() or forced navigation, including formless search widgets.
+          // No form: best-effort key dispatch for formless search widgets (no forced navigation).
           el.dispatchEvent(new KeyboardEvent('keyup',eventOptions));
           return JSON.stringify({status:'key-dispatched'});
         }
