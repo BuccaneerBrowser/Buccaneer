@@ -283,17 +283,24 @@
       var z = parseInt(s.zIndex, 10);
       var hasZ = !isNaN(z);
       var area = r.width * r.height;
-      // Ad/popup copy: short promotional text.
+      // Element text, kept for the reconnaissance log below.
       var text = '';
       try { text = (el.textContent || '').toLowerCase(); } catch (e) { /* ignore */ }
-      var hasAdText = text.length > 0 && text.length < 400 &&
-        /vpn|free|download|install|sign ?up|subscribe|premium|upgrade|no ads|remove ads|adblock|block ads|get (it|this)|watch (it|this)|claim|offer|trial/.test(text);
-      // (a) is an ad overlay. Three signals, any one of which is enough:
+      // (a) is an ad overlay. Two signals:
       //     1. a floating iframe with a very high z-index and small size — an ad
       //        creative. Works with or without a video (home pages, pre-roll). The
       //        high-z + small-size bar keeps a large, low-z player iframe safe.
       //     2. covers a significant part of the video (needs a video on the page).
-      //     3. a floating element carrying ad copy.
+      //
+      //     An earlier version also killed any floating element whose text matched
+      //     ad copy ("free", "download", "offer", "sign up", ...). That matched
+      //     ordinary page text: movie synopses and page titles. On Movy and
+      //     CineJoy the hero content layer is position:absolute, carries the
+      //     Play button, and its synopsis contains words like "offer" or
+      //     "download" — so the rule hid the Play button on show pages
+      //     (2026-10-21, "Bad Apples" report). Text is not a reliable ad signal;
+      //     real ad popups are iframes (signal 1) or control-less overlays over
+      //     the video (signal 2).
       var isIframeAd = el.tagName === 'IFRAME' && floating && hasZ && z >= 1000 &&
         area >= 1000 && (viewportArea <= 0 || area < viewportArea * 0.25);
       var coversVideo = false;
@@ -306,8 +313,7 @@
           Math.max(0, Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top));
         coversVideo = above && overlapArea >= videoArea * 0.1;
       }
-      var isFloatingAdText = floating && hasAdText;
-      if (!isIframeAd && !coversVideo && !isFloatingAdText) {
+      if (!isIframeAd && !coversVideo) {
         // Reconnaissance: log floating high-z elements we did NOT kill, once each,
         // so a popup that slips through can be identified from the session log.
         if (floating && hasZ && z >= 100 && area >= 1000 && !el.getAttribute('data-fslogged')) {
@@ -328,14 +334,17 @@
         }
         continue;
       }
-      // (b) is NOT real player UI: skip elements that contain a video or that carry
-      //     interactive controls without ad copy (an ad popup may have its own buttons).
+      // (b) is NOT real player UI: skip elements that contain a video or ANY
+      //     interactive controls. An element with buttons is page UI, not an ad
+      //     overlay — ad-like words in a synopsis or title must not override
+      //     that. (An iframe ad is opaque to querySelector, so this check can
+      //     never protect one.)
       var containsVideo = false;
       try { containsVideo = !!(el.querySelector && el.querySelector('video')); } catch (e) { /* ignore */ }
       if (containsVideo) continue;
       var hasControls = false;
       try { hasControls = !!(el.querySelector && el.querySelector('button, [role="button"], input, select')); } catch (e) { /* ignore */ }
-      if (hasControls && !isIframeAd && !hasAdText) continue;
+      if (hasControls && !isIframeAd) continue;
       // Kill it. Floating popups are out of flow: hide them so they are gone, not just
       // click-through. In-flow layers that cover the video become click-through so taps
       // reach the player underneath.
@@ -348,7 +357,7 @@
             tag: el.tagName,
             pos: s.position,
             z: s.zIndex,
-            reason: isIframeAd ? 'floating_iframe' : (coversVideo ? 'covers_video' : 'floating_ad'),
+            reason: isIframeAd ? 'floating_iframe' : 'covers_video',
             text: text.replace(/\s+/g, ' ').trim().substring(0, 60)
           }));
         }
