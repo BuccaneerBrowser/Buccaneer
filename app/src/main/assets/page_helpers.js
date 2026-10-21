@@ -272,6 +272,40 @@
       if (m.state && typeof m.state === 'object') lastFrameState = { at: Date.now(), state: m.state };
       return;
     }
+    if (m.__fbFs === 1 || m.__fbFsCmd === 1) {
+      if (__isFlixer) return; // Flixer keeps the native fullscreen path.
+      if (m.__fbFs === 1) {
+        // A child frame entered/exited CSS fullscreen: fill/restore its iframe element.
+        var fr = null;
+        if (e.source) {
+          var frames = document.getElementsByTagName('iframe');
+          for (var i = 0; i < frames.length; i++) {
+            try { if (frames[i].contentWindow === e.source) { fr = frames[i]; break; } } catch (x) { /* ignore */ }
+          }
+        }
+        if (m.on === 1) {
+          if (!fr) return;
+          cssFs.frameChild = e.source;
+          cssFsEnter(fr);
+          if (window !== window.top) cssFsPostParent(true);
+        } else {
+          var child = cssFs.frameChild;
+          cssFs.frameChild = null;
+          if (cssFs.active) cssFsExit();
+          if (child) { try { child.postMessage({ __fbFs: 1, on: 0 }, '*'); } catch (x) { /* ignore */ } }
+          if (window !== window.top) cssFsPostParent(false);
+        }
+        return;
+      }
+      // __fbFsCmd: an ancestor made this frame's element CSS-fullscreen; enter/exit internally.
+      var t = pickTarget();
+      if (m.on === 1) {
+        if (t && t.video) cssFsEnter(cssFsTarget(t.video));
+      } else {
+        cssFsExit();
+      }
+      return;
+    }
     if (m.__fbCmd !== 1) return;
     // Accept commands only from an ancestor frame (the top frame), never from sibling pages.
     var fromAncestor = false;
@@ -325,6 +359,86 @@
 
   // ------------------------------------------------------------------ full screen
 
+  // Page-level (CSS) fullscreen. Native WebView fullscreen (Chromium's FullScreenView)
+  // draws a center play/pause button that stays on screen while the video is paused.
+  // Instead of native fullscreen we make the player container a page-level (CSS)
+  // fullscreen: position:fixed over the whole viewport, black background, and the site's
+  // own player UI (which auto-hides on idle) stays in charge. Chromium's native
+  // FullScreenView is never created, so the center button is never drawn.
+  //
+  // Players like Clappr check document.fullscreenElement and listen for fullscreenchange,
+  // so we fake both: while active, fullscreenElement reports our element, and we dispatch
+  // a synthetic fullscreenchange on enter/exit.
+  //
+  // Flixer keeps the native path: its document returns early below, so none of this is
+  // installed there.
+
+  var cssFs = { active: false, el: null, saved: null, frameChild: null };
+  var __nativeFsFns = {};
+
+  function cssFsSave(el) {
+    var props = ['position', 'left', 'top', 'right', 'bottom', 'width', 'height', 'margin', 'z-index', 'background', 'object-fit'];
+    var s = {};
+    for (var i = 0; i < props.length; i++) s[props[i]] = { v: el.style.getPropertyValue(props[i]), p: el.style.getPropertyPriority(props[i]) };
+    return s;
+  }
+
+  function cssFsRestore(el, s) {
+    var keys = Object.keys(s);
+    for (var i = 0; i < keys.length; i++) el.style.setProperty(keys[i], s[keys[i]].v, s[keys[i]].p);
+  }
+
+  function cssFsNotifyApp(on) {
+    try { if (window.Buccaneer && window.Buccaneer.cssFullscreen) window.Buccaneer.cssFullscreen(on ? true : false); } catch (e) { /* ignore */ }
+  }
+
+  function cssFsPostParent(on) {
+    try { parent.postMessage({ __fbFs: 1, on: on ? 1 : 0 }, '*'); } catch (e) { /* ignore */ }
+  }
+
+  // The element to make CSS-fullscreen: a bare <video> becomes its player container,
+  // so the site's own controls come along.
+  function cssFsTarget(el) {
+    if (el && el.tagName === 'VIDEO') {
+      var c = playerContainer(el);
+      if (c && c !== el) return c;
+    }
+    return el;
+  }
+
+  function cssFsEnter(el) {
+    if (!el || cssFs.active) return Promise.resolve();
+    cssFs.saved = cssFsSave(el);
+    var st = el.style;
+    st.setProperty('position', 'fixed', 'important');
+    st.setProperty('left', '0', 'important');
+    st.setProperty('top', '0', 'important');
+    st.setProperty('right', '0', 'important');
+    st.setProperty('bottom', '0', 'important');
+    st.setProperty('width', '100vw', 'important');
+    st.setProperty('height', '100vh', 'important');
+    st.setProperty('margin', '0', 'important');
+    st.setProperty('z-index', '2147483647', 'important');
+    st.setProperty('background', '#000', 'important');
+    if (el.tagName === 'VIDEO') st.setProperty('object-fit', 'contain', 'important');
+    cssFs.el = el;
+    cssFs.active = true;
+    try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
+    if (window === window.top) cssFsNotifyApp(true); else cssFsPostParent(true);
+    return Promise.resolve();
+  }
+
+  function cssFsExit() {
+    if (!cssFs.active) return;
+    var el = cssFs.el;
+    cssFs.active = false;
+    cssFs.el = null;
+    try { if (el) cssFsRestore(el, cssFs.saved); } catch (e) { /* ignore */ }
+    cssFs.saved = null;
+    try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
+    if (window === window.top) cssFsNotifyApp(false); else cssFsPostParent(false);
+  }
+
   // Player controls auto-hide in full screen. The player's own CSS only hides them on pointer
   // idle; a TV remote is not a pointer, so on sites like CineJoy the controls (and the big
   // centre play/pause button) stay up forever. While the video is full screen we dispatch a
@@ -372,8 +486,22 @@
     }
     function schedule() {
       if (timer) return;
+      // A few pokes are enough to start the idle timer on players whose controls
+      // stay up forever without a pointer event (CineJoy-style). Poking
+      // continuously instead keeps resetting the idle timer on players that
+      // auto-hide on their own (MovieBite-style), so their controls — and the
+      // center play/pause button — never go away. Poke a bounded number of times,
+      // then stop and let the player's own idle logic take over.
+      var pokes = 0;
+      var maxPokes = 2;
       timer = setInterval(function () {
         if (!active) return;
+        pokes++;
+        if (pokes > maxPokes) {
+          clearInterval(timer);
+          timer = 0;
+          return;
+        }
         poke();
       }, 1500);
     }
@@ -408,7 +536,13 @@
 
 
 
-  // an ancestor of the video that is about the same size: the player with its own controls
+  // The player's root: the first ancestor of the video that holds the player's own
+  // control buttons. Making THAT element CSS-fullscreen keeps the site's controls
+  // visible, and it matches (or sits inside) the container the player tracks for its
+  // fullscreen state, so the player recognizes the session. A pure size-based walk
+  // cannot stop when the video fills the viewport (every ancestor is the same size)
+  // and ends at the page wrapper, so the button check is the primary signal; the
+  // size walk remains the fallback for players without in-page buttons.
   function playerContainer(v) {
     var r = v.getBoundingClientRect();
     var area = r.width * r.height;
@@ -417,7 +551,9 @@
     var hops = 0;
     while (p && p !== document.body && p !== document.documentElement && hops < 6) {
       var pr = p.getBoundingClientRect();
-      if (pr.width * pr.height > area * 1.35) break;
+      var parea = pr.width * pr.height;
+      if (parea <= area * 3 && p.querySelector && p.querySelector('button')) return p;
+      if (parea > area * 1.35) break;
       best = p;
       p = p.parentElement;
       hops++;
@@ -470,6 +606,17 @@
       var old=document.getElementById('__fb_fs_overlay');if(old&&old.parentNode)old.parentNode.removeChild(old);
       return 'ok';
     },
+    // Ask the page to leave page-level (CSS) fullscreen (the app's Back key).
+    exitCssFullscreen: function () {
+      if (!cssFs.active) return 'none';
+      var child = cssFs.frameChild;
+      cssFs.frameChild = null;
+      cssFsExit();
+      if (child) { try { child.postMessage({ __fbFs: 1, on: 0 }, '*'); } catch (e) { /* ignore */ } }
+      return 'ok';
+    },
+    // 1 while the page is in page-level (CSS) fullscreen.
+    cssFullscreenActive: function () { return cssFs.active ? 1 : 0; },
     selectAt: function (fx,fy) { return selectAt(fx*window.innerWidth,fy*window.innerHeight); },
     focusTarget: function () { var t=pickTarget(); if(!t)return 'none'; try{(t.frame||t.video).focus();return t.frame?'frame':'ok';}catch(e){return 'none';} },
     setDiagnosticLogging: function (enabled) {
@@ -835,7 +982,20 @@
         try { e.preventDefault(); e.stopPropagation(); } catch (x) { /* ignore */ }
         if (!done) {
           done = true;
-          enterFullscreen(target);
+          if (target && frameIsFlixer(target)) {
+            // Flixer keeps the native fullscreen path (trusted tap, PowerVR constraints).
+            var nfn = __nativeFsFns.requestFullscreen || __nativeFsFns.webkitRequestFullscreen || null;
+            if (nfn) {
+              try { var p = nfn.call(target); if (p && typeof p.catch === 'function') p.catch(function () { /* refused */ }); } catch (x) { /* ignore */ }
+            }
+          } else {
+            enterFullscreen(target);
+            if (target && target.tagName === 'IFRAME' && !frameIsFlixer(target)) {
+              // Tell the frame to go CSS-fullscreen internally, so its player (and its
+              // fullscreen state) matches the now-fullscreen iframe element.
+              try { target.contentWindow.postMessage({ __fbFsCmd: 1, on: 1 }, '*'); } catch (x) { /* ignore */ }
+            }
+          }
           setTimeout(remove, 500);
         }
       }
@@ -1090,6 +1250,83 @@
   // hidden. So we skip the synthetic poke on YouTube and let its own idle logic do the hiding.
   var __isYouTube = /(^|\.)youtube\.com$|(^|\.)youtu\.be$/.test(__host);
   if (!__isYouTube) installControlsAutoHide();
+
+  // Replace native fullscreen with the CSS fullscreen above, so Chromium's native
+  // FullScreenView (and its persistent center button) is never created. Runs at document
+  // start, before page scripts; never on flixer (which returned above).
+  (function installCssFullscreenIntercept() {
+    if (window.__fbFsIntercept) return;
+    window.__fbFsIntercept = true;
+    var proto = window.Element.prototype;
+    var names = ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i];
+      if (typeof proto[n] !== 'function') continue;
+      __nativeFsFns[n] = proto[n];
+      proto[n] = function () {
+        var el = cssFsTarget(this);
+        if (!el) return Promise.reject(new Error('no fullscreen target'));
+        return cssFsEnter(el);
+      };
+    }
+    // The legacy media API also triggers native fullscreen. Players on Android try
+    // video.webkitEnterFullscreen() BEFORE requestFullscreen(), and on this WebView the
+    // method lives on HTMLVideoElement.prototype (HTMLMediaElement.prototype has none),
+    // so both prototypes must be covered or the player's first-choice path goes native.
+    var mediaProtos = [window.HTMLVideoElement, window.HTMLMediaElement];
+    for (var mp = 0; mp < mediaProtos.length; mp++) {
+      var mpProto = mediaProtos[mp] && mediaProtos[mp].prototype;
+      if (!mpProto) continue;
+      if (typeof mpProto.webkitEnterFullscreen === 'function') {
+        __nativeFsFns.webkitEnterFullscreen = mpProto.webkitEnterFullscreen;
+        mpProto.webkitEnterFullscreen = function () {
+          return cssFsEnter(cssFsTarget(this));
+        };
+      }
+      if (typeof mpProto.webkitExitFullscreen === 'function') {
+        __nativeFsFns.webkitExitFullscreen = mpProto.webkitExitFullscreen;
+        mpProto.webkitExitFullscreen = function () {
+          if (cssFs.active) { cssFsExit(); return; }
+          try { __nativeFsFns.webkitExitFullscreen.call(this); } catch (e) { /* ignore */ }
+        };
+      }
+    }
+    // Fake the document's fullscreen state so player logic (Clappr and friends) sees a
+    // normal fullscreen session.
+    var docProto = Object.getPrototypeOf(document);
+    var nativeFsElement = Object.getOwnPropertyDescriptor(docProto, 'fullscreenElement');
+    var nativeFsEnabled = Object.getOwnPropertyDescriptor(docProto, 'fullscreenEnabled');
+    try {
+      Object.defineProperty(document, 'fullscreenElement', {
+        configurable: true,
+        get: function () {
+          if (cssFs.active) return cssFs.el;
+          try {
+            if (nativeFsElement && nativeFsElement.get) return nativeFsElement.get.call(this) || null;
+            return document.webkitFullscreenElement || null;
+          } catch (e) { return null; }
+        }
+      });
+      Object.defineProperty(document, 'fullscreenEnabled', {
+        configurable: true,
+        get: function () {
+          if (cssFs.active) return true;
+          try { if (nativeFsEnabled && nativeFsEnabled.get) return !!nativeFsEnabled.get.call(this); } catch (e) { /* ignore */ }
+          return true;
+        }
+      });
+      var origExit = docProto.exitFullscreen;
+      document.exitFullscreen = function () {
+        if (cssFs.active) { cssFsExit(); return Promise.resolve(); }
+        try { return origExit ? origExit.call(document) : Promise.resolve(); } catch (e) { return Promise.resolve(); }
+      };
+      var origWebkitExit = docProto.webkitExitFullscreen;
+      document.webkitExitFullscreen = function () {
+        if (cssFs.active) { cssFsExit(); return; }
+        try { if (origWebkitExit) origWebkitExit.call(document); } catch (e) { /* ignore */ }
+      };
+    } catch (e) { /* if the document state cannot be faked, players may misbehave, but fullscreen itself still works */ }
+  })();
 
   // StreamCorner: remove sandbox attribute from player iframes BEFORE they load.
   // The player checks its security context and refuses to play if sandboxed.

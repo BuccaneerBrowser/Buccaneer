@@ -248,7 +248,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (lastTapAt <= 0L || tapAge !in 0L..2000L || state == null) return
         try { if (JSONObject(state).optInt("ok", 0) != 1) return } catch (_: Exception) { return }
         // Discovery notifications never overwrite a pinned editor's qualified state.
-        if (textMode != TextMode.NONE || customView != null || menu.shown() || listPanel.shown() || textPanel.shown() || startPage.shown()) return
+        if (textMode != TextMode.NONE || customView != null || cssFullscreenActive || menu.shown() || listPanel.shown() || textPanel.shown() || startPage.shown()) return
         if (inputFrame.isEmpty()) inputFieldState = state
         openPageKeypad()
     }
@@ -262,6 +262,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var interactionSerial = 0L
     private val activityInstance = java.util.UUID.randomUUID().toString()
     private var pendingFullscreen = false
+    private var cssFullscreenActive = false
     private var seekInFlight = false
     private var queuedSeek = 0
     private val pendingEvaluations = HashMap<Long, Runnable>()
@@ -1291,6 +1292,25 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         @JavascriptInterface
         fun pageIsForeground(): Boolean = foreground
 
+        /** Page-level (CSS) fullscreen: the page reports enter/exit so remote keys route to it. */
+        @JavascriptInterface
+        fun cssFullscreen(active: Boolean) {
+            val epoch = pageEpoch
+            runOnUiThread {
+                if (epoch != pageEpoch || !pageAvailable()) return@runOnUiThread
+                if (cssFullscreenActive == active) return@runOnUiThread
+                cssFullscreenActive = active
+                DiagnosticLog.record(this@MainActivity, if (active) "css_fullscreen_on" else "css_fullscreen_off")
+                if (active) {
+                    hideCursor()
+                    refreshOsd(500, "Select: play/pause    Left/Right: seek    Up/Down: volume    Back: exit")
+                } else {
+                    osd.hideNow()
+                    if (pageAvailable()) webView.requestFocus()
+                }
+            }
+        }
+
         @JavascriptInterface
         fun playbackActive(token: String?) {
             val epoch = pageEpoch
@@ -1655,7 +1675,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 textPanel.shown() -> "textPanel"
                 menu.shown() -> "menu"
                 listPanel.shown() -> "listPanel"
-                customView != null -> "fullscreen"
+                customView != null || cssFullscreenActive -> "fullscreen"
                 startPage.shown() -> "startPage"
                 else -> "browse"
             }
@@ -1666,7 +1686,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 textPanel.shown() -> onTextPanelKey(event)
                 menu.shown() -> onMenuKey(event)
                 listPanel.shown() -> onListKey(event)
-                customView != null -> onFullscreenKey(event)
+                customView != null || cssFullscreenActive -> onFullscreenKey(event)
                 startPage.shown() -> onStartKey(event)
                 else -> onBrowseKey(event)
             }
@@ -2250,6 +2270,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         cancelPlayerWork()
         editorSession++
         if (rotateDocument) documentToken = java.util.UUID.randomUUID().toString()
+        cssFullscreenActive = false
         mediaOwner = ""
         playbackHeartbeatAt = 0L
         pendingEvaluations.values.toList().forEach { handler.removeCallbacks(it) }
@@ -2482,7 +2503,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             } else {
                 postForPage(150) { if (pendingFullscreen && interaction == interactionSerial && intent == playerIntent && target === (customView ?: webView)) sendTap(webView.width / 2f, webView.height / 2f) }
                 postForPage(2200) {
-                    if (interaction == interactionSerial && intent == playerIntent && customView == null) {
+                    if (interaction == interactionSerial && intent == playerIntent && customView == null && !cssFullscreenActive) {
                         cancelPendingFullscreen()
                         toast("The page refused full screen. Use the player's own full-screen button.")
                     }
@@ -2526,13 +2547,29 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (notifyPage && pageAvailable()) callback?.onCustomViewHidden()
     }
 
+    /** Ask the page to leave page-level (CSS) fullscreen. */
+    private fun exitCssFullscreen() {
+        if (!cssFullscreenActive) return
+        eval("window.__fb ? __fb.exitCssFullscreen() : 'none'") {
+            // The page's exit reports back through the bridge and clears the flag.
+            // If it never does (JS error, mid-navigation), clear it ourselves.
+            if (cssFullscreenActive) {
+                cssFullscreenActive = false
+                osd.hideNow()
+                if (pageAvailable()) webView.requestFocus()
+            }
+        }
+    }
+
 
     /** Keys while a video is full screen. */
     private fun onFullscreenKey(event: KeyEvent): Boolean {
         val rep = event.repeatCount
         when (event.keyCode) {
             KeyEvent.KEYCODE_BACK -> {
-                if (rep == 0) leaveFullscreen(true)
+                if (rep == 0) {
+                    if (customView != null) leaveFullscreen(true) else exitCssFullscreen()
+                }
                 return true
             }
             KeyEvent.KEYCODE_DPAD_CENTER,
@@ -3059,7 +3096,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         // 9. Show playback
         items.add(MenuItem("Show playback controls") {
             refreshOsd(75, "Select position • Hold FF/Rewind for larger skips")
-            if (customView == null) showCursor()
+            if (customView == null && !cssFullscreenActive) showCursor()
         })
         // 10. Popup
         val guardLabel = "Popup Guard: " + (if (guard.enabled) "ON" else "OFF") +
