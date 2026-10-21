@@ -373,7 +373,7 @@
   // Flixer keeps the native path: its document returns early below, so none of this is
   // installed there.
 
-  var cssFs = { active: false, el: null, saved: null, frameChild: null };
+  var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false };
   var __nativeFsFns = {};
 
   function cssFsSave(el) {
@@ -425,7 +425,38 @@
     cssFs.active = true;
     try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
     if (window === window.top) cssFsNotifyApp(true); else cssFsPostParent(true);
+    installFsResumeGuard(el);
     return Promise.resolve();
+  }
+
+  // Entering CSS fullscreen resizes the player container (or the iframe that holds the
+  // player) to fill the viewport. On some players — notably the vidbolt player inside a
+  // cross-origin iframe — that resize pauses the video. If the video was playing before we
+  // entered fullscreen, watch for the first ~2.5 s and resume it if the transition paused
+  // it. The short window means a deliberate user pause (which happens later) is never
+  // fought. Only active in the frame that actually holds the <video>; in an ancestor frame
+  // `el` is the <iframe> element and no video is reachable, so this is a no-op there.
+  function installFsResumeGuard(el) {
+    if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
+    function findVideo() {
+      var e = cssFs.el;
+      if (!e) return null;
+      if (e.tagName === 'VIDEO') return e;
+      return e.querySelector ? e.querySelector('video') : null;
+    }
+    var v = findVideo();
+    if (!v || v.paused || v.ended) { cssFs.wasPlaying = false; return; }
+    cssFs.wasPlaying = true;
+    var checks = 0;
+    cssFs.resumeTimer = setInterval(function () {
+      checks++;
+      if (!cssFs.active || checks > 10) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; return; }
+      var vv = findVideo();
+      if (vv && vv.paused && !vv.ended) {
+        safePlay(vv);
+        clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0;
+      }
+    }, 250);
   }
 
   function cssFsExit() {
@@ -433,6 +464,8 @@
     var el = cssFs.el;
     cssFs.active = false;
     cssFs.el = null;
+    if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
+    cssFs.wasPlaying = false;
     try { if (el) cssFsRestore(el, cssFs.saved); } catch (e) { /* ignore */ }
     cssFs.saved = null;
     try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
