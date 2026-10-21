@@ -286,11 +286,14 @@
       // Element text, kept for the reconnaissance log below.
       var text = '';
       try { text = (el.textContent || '').toLowerCase(); } catch (e) { /* ignore */ }
-      // (a) is an ad overlay. Two signals:
+      // (a) is an ad overlay. Three signals:
       //     1. a floating iframe with a very high z-index and small size — an ad
       //        creative. Works with or without a video (home pages, pre-roll). The
       //        high-z + small-size bar keeps a large, low-z player iframe safe.
       //     2. covers a significant part of the video (needs a video on the page).
+      //     3. a positioned element with an abnormally high z-index (>= 1,000,000)
+      //        — an injected ad badge or full-viewport click-catcher on a page
+      //        with no video (see isHighZAd below).
       //
       //     An earlier version also killed any floating element whose text matched
       //     ad copy ("free", "download", "offer", "sign up", ...). That matched
@@ -303,6 +306,18 @@
       //     the video (signal 2).
       var isIframeAd = el.tagName === 'IFRAME' && floating && hasZ && z >= 1000 &&
         area >= 1000 && (viewportArea <= 0 || area < viewportArea * 0.25);
+      // (a3) injected ad overlay: a positioned element with an abnormally high
+      //      z-index. Ad injectors force their creative on top by setting the
+      //      32-bit max z-index (2147483646/7); legitimate page UI never reaches
+      //      1,000,000. This catches the floating ad badges AND the full-viewport
+      //      click-catchers that appear on non-video pages (home, show/season
+      //      pages) where covers_video can't fire because there is no <video>.
+      //      The containsVideo / hasControls checks below still protect real
+      //      player UI and modals, so this is safe to apply broadly.
+      //      (2026-10-21, coreflix "baseball" popups: z=2147483646 fixed DIVs
+      //      with an injected <style> block, no controls, no video — slipped
+      //      through both isIframeAd and covers_video.)
+      var isHighZAd = floating && hasZ && z >= 1000000 && area >= 1000;
       var coversVideo = false;
       if (haveVideo && vr) {
         // Only a positioned element can paint above the video in the stacking order;
@@ -313,7 +328,7 @@
           Math.max(0, Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top));
         coversVideo = above && overlapArea >= videoArea * 0.1;
       }
-      if (!isIframeAd && !coversVideo) {
+      if (!isIframeAd && !coversVideo && !isHighZAd) {
         // Reconnaissance: log floating high-z elements we did NOT kill, once each,
         // so a popup that slips through can be identified from the session log.
         if (floating && hasZ && z >= 100 && area >= 1000 && !el.getAttribute('data-fslogged')) {
@@ -357,7 +372,7 @@
             tag: el.tagName,
             pos: s.position,
             z: s.zIndex,
-            reason: isIframeAd ? 'floating_iframe' : 'covers_video',
+            reason: isIframeAd ? 'floating_iframe' : (isHighZAd ? 'high_z_ad' : 'covers_video'),
             text: text.replace(/\s+/g, ' ').trim().substring(0, 60)
           }));
         }
