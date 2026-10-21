@@ -268,6 +268,29 @@
     }
     var viewportArea = (window.innerWidth || 0) * (window.innerHeight || 0);
 
+    // Identify the main player iframe: the largest iframe with a real (non-blank,
+    // non-srcdoc) src. Streaming sites put the player iframe at the max z-index
+    // (2147483647) + position:fixed when in fullscreen — the SAME z-index the ad
+    // injector uses. The video inside is cross-origin, so containsVideo/hasControls
+    // can't see it, and a naive high-z rule kills the player (black screen with
+    // audio, dead seek bridge — coreflix 2026-10-21). Exempt the main player so the
+    // high-z rule only ever hits injected ads. Ad click-catcher iframes use
+    // about:blank / srcdoc srcs (not a real content URL) and are not the largest,
+    // so they are still caught.
+    var playerIframe = null, playerArea = 0;
+    var ifrList;
+    try { ifrList = document.getElementsByTagName('iframe'); } catch (e) { ifrList = []; }
+    for (var fi = 0; fi < ifrList.length; fi++) {
+      var f = ifrList[fi];
+      var fs; try { fs = getComputedStyle(f); } catch (e) { continue; }
+      if (fs.display === 'none' || fs.visibility === 'hidden') continue;
+      var fsrc = (f.src || '').toLowerCase();
+      if (!fsrc || fsrc === 'about:blank' || fsrc.indexOf('srcdoc') === 0) continue;
+      var fr; try { fr = f.getBoundingClientRect(); } catch (e) { continue; }
+      var fa = fr.width * fr.height;
+      if (fa > playerArea) { playerArea = fa; playerIframe = f; }
+    }
+
     var els;
     try { els = document.querySelectorAll('div, span, a, iframe'); } catch (e) { return; }
     for (var i = 0; i < els.length; i++) {
@@ -317,7 +340,11 @@
       //      (2026-10-21, coreflix "baseball" popups: z=2147483646 fixed DIVs
       //      with an injected <style> block, no controls, no video — slipped
       //      through both isIframeAd and covers_video.)
-      var isHighZAd = floating && hasZ && z >= 1000000 && area >= 1000;
+      // Exempt the main player and its container chain: an injected ad is never
+      // the player or an ancestor of it, so this cannot spare a real ad. (The
+      // site's fullscreen may put the player's wrapper at a high z-index too.)
+      var isPlayerChain = !!(playerIframe && el.contains && el.contains(playerIframe));
+      var isHighZAd = floating && hasZ && z >= 1000000 && area >= 1000 && !isPlayerChain;
       var coversVideo = false;
       if (haveVideo && vr) {
         // Only a positioned element can paint above the video in the stacking order;
