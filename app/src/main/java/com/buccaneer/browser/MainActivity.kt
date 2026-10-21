@@ -392,6 +392,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 return
             }
             cursor.visibility = View.GONE
+            liftPointerIfPlaying()
             hoverActive = false
         }
     }
@@ -1303,6 +1304,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 DiagnosticLog.record(this@MainActivity, if (active) "css_fullscreen_on" else "css_fullscreen_off")
                 if (active) {
                     hideCursor()
+                    // The playback heartbeat may not be fresh yet (it lands on a 2 s cadence);
+                    // retry the pointer lift once it can be, so the parked cursor over the
+                    // controls cannot pin pointer-aware players' controls visible.
+                    handler.postDelayed({
+                        if (epoch == pageEpoch && cssFullscreenActive) liftPointerIfPlaying()
+                    }, 3000)
                     refreshOsd(500, "Select: play/pause    Left/Right: seek    Up/Down: volume    Back: exit")
                 } else {
                     osd.hideNow()
@@ -2050,6 +2057,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private fun hideCursor() {
         handler.removeCallbacks(hideCursorRunnable)
         cursor.visibility = View.GONE
+        liftPointerIfPlaying()
         hoverActive = false
     }
 
@@ -2157,6 +2165,30 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         val event = PointerTap.event(tap.downAt, SystemClock.uptimeMillis(),
             if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP, tap.x, tap.y, tap.mouse)
         try { tap.target.dispatchTouchEvent(event) } catch (_: Exception) { } finally { event.recycle() }
+    }
+
+    /**
+     * Lift the simulated mouse pointer out of the page. The browser keeps the pointer parked at
+     * the last hover position and never tells the page it is gone, so pointer-aware players (Movy)
+     * see "pointer over the controls" forever and pin their controls visible. Lifting only while
+     * video plays: while browsing, the parked pointer is what keeps hover menus open while the
+     * user reads them, so it must stay.
+     */
+    private fun liftPointerIfPlaying() {
+        if (!hoverActive) return
+        val now = SystemClock.elapsedRealtime()
+        if (playbackHeartbeatAt <= 0L || now - playbackHeartbeatAt >= 12_000L) return
+        hoverActive = false
+        try {
+            val t = SystemClock.uptimeMillis()
+            val ev = MotionEvent.obtain(t, t, MotionEvent.ACTION_HOVER_EXIT, cx, cy, 0)
+            ev.source = InputDevice.SOURCE_MOUSE
+            webView.dispatchGenericMotionEvent(ev)
+            ev.recycle()
+            DiagnosticLog.record(this, "pointer_lifted", JSONObject().put("x", cx).put("y", cy))
+        } catch (_: Exception) {
+            // hover is a nicety; never let it break browsing
+        }
     }
 
     /** Mouse-style hover so menus and video controls that react to the pointer appear. */
