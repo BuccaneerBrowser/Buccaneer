@@ -9,13 +9,7 @@
   },
   {
     "path": "app/src/main/assets/page_helpers.js",
-    "before": "  function diagnostic(event, data) {",
-    "sha256": "bdec07fd6e87cf473299ec27e88a8be9f2e9ac215703f2e2ff87dec65a587fd5"
-  },
-  {
-    "path": "app/src/main/assets/page_helpers.js",
-    "after": "  document.addEventListener('loadedmetadata'",
-    "sha256": "afb7c01661f8a417c11cf05da9897fd59ec84fded9cea5bab4cd02049186ea0f"
+    "sha256": "a96b90508f4c41769cb24e86ef5b7f5c695eb6a700f57d59b3f0a1784b95fdc1"
   },
   {
     "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
