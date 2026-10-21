@@ -1,7 +1,7 @@
 [
   {
     "path": "app/src/main/assets/flixer_image_guard.js",
-    "sha256": "147f8bcd54cdd92e3b0d63c25ded876efb329518e0f15db4360f87c89883e179"
+    "sha256": "5afdf0b72a3c21cdbad3a99640dd0bb683642163408f199ef1ff5622181d4061"
   },
   {
     "path": "app/src/main/assets/popup_guard.js",
@@ -25,8 +25,8 @@
   },
   {
     "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
-    "after": "            // Detect flixer page:",
+    "after": "            // Detect guarded poster-grid page:",
     "before": "        @TargetApi(Build.VERSION_CODES.M)",
-    "sha256": "30a73cd86bf54f6e457fd2b9fcb41b36d6fc57bcf674f3191ba4941128ae754e"
+    "sha256": "cc366f65fe5046dfa66377eca18c3fe1cdc9ce7942fde9d90f50d0d7d68bf8af"
   }
 ]

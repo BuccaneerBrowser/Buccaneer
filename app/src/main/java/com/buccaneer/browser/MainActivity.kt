@@ -360,12 +360,25 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var helpersJs = ""
     private var flixerImageGuardJs = ""
 
-    // TMDB image virtualization: allowlist of image URLs currently visible on flixer.
-    // When flixer is the active page, image.tmdb.org requests NOT in this set get
-    // a 1x1 transparent pixel instead of the real image. This keeps the GPU texture
-    // count low enough to avoid the PowerVR KEGLReleaseRenderTarget crash.
+    // TMDB image virtualization: allowlist of image URLs currently visible on a
+    // guarded poster-grid host. When such a host is the active page,
+    // image.tmdb.org requests NOT in this set get a 1x1 transparent pixel
+    // instead of the real image. This keeps the GPU texture count low enough to
+    // avoid the PowerVR KEGLReleaseRenderTarget crash.
     @Volatile private var tmdbAllowlist: MutableSet<String> = mutableSetOf()
     @Volatile private var onFlixerPage = false
+    // True when the active page is a guarded poster-grid host (flixer or cinejoy)
+    // — i.e. the TMDB image firewall (allowlist + 1x1 backstop) is active.
+    @Volatile private var onImageGuardedPage = false
+
+    // Guarded poster-grid hosts: the TMDB image firewall is active on these.
+    // Flixer loads a ~180-poster intro burst; cinejoy lazy-loads a large grid.
+    // Both produce enough GPU texture churn to tip the PowerVR driver over.
+    private fun isImageGuardedHost(host: String): Boolean {
+        return host == "flixer.gd" || host.endsWith(".flixer.gd") ||
+            host == "flixer.su" || host.endsWith(".flixer.su") ||
+            host == "cinejoy.pk" || host.endsWith(".cinejoy.pk")
+    }
 
     // GPU render-reset: flixer crashes (KEGLReleaseRenderTarget) when loaded
     // after a video site (coreflix/cinejoy) — residual video GPU state tips the
@@ -936,12 +949,21 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             injectFallback(view)
             injectDarkMode(view)
             try { view?.evaluateJavascript(fmhyThemeJs, null) } catch (_: Throwable) {}
-            // Detect flixer page: activate TMDB image firewall.
+            // Detect guarded poster-grid page: activate TMDB image firewall.
             val host = try { Uri.parse(url ?: "").host?.lowercase(Locale.US)?.removeSuffix(".") ?: "" } catch (_: Throwable) { "" }
             val isFlixer = host == "flixer.gd" || host.endsWith(".flixer.gd") || host == "flixer.su" || host.endsWith(".flixer.su")
+            val isImageGuarded = isImageGuardedHost(host)
+            if (isImageGuarded != onImageGuardedPage) {
+                onImageGuardedPage = isImageGuarded
+                if (!isImageGuarded) tmdbAllowlist.clear()
+                DiagnosticLog.record(this@MainActivity, "image_firewall", JSONObject().apply {
+                    put("active", isImageGuarded)
+                    put("host", host)
+                    put("allowlistSize", tmdbAllowlist.size)
+                })
+            }
             if (isFlixer != onFlixerPage) {
                 onFlixerPage = isFlixer
-                if (!isFlixer) tmdbAllowlist.clear()
                 DiagnosticLog.record(this@MainActivity, "flixer_image_firewall", JSONObject().apply {
                     put("active", isFlixer)
                     put("allowlistSize", tmdbAllowlist.size)
@@ -970,8 +992,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (!isFlixer && host.isNotEmpty()) {
                 lastNonFlixerHost = host
             }
-            // Inject the flixer image guard JS (idempotent — safe to call repeatedly).
-            if (isFlixer) {
+            // Inject the image guard JS (idempotent — safe to call repeatedly).
+            if (isImageGuarded) {
                 try { view?.evaluateJavascript(flixerImageGuardJs, null) } catch (_: Throwable) { }
             }
         }
@@ -1020,9 +1042,10 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     })
                 }
             }
-            // TMDB image firewall: on flixer, only allow images in the allowlist.
-            // Everything else gets a 1x1 transparent pixel to keep GPU texture count low.
-            if (r != null && onFlixerPage) {
+            // TMDB image firewall: on a guarded poster-grid host, only allow
+            // images in the allowlist. Everything else gets a 1x1 transparent
+            // pixel to keep GPU texture count low.
+            if (r != null && onImageGuardedPage) {
                 val host = r.url.host?.lowercase(Locale.US) ?: ""
                 if (host == "image.tmdb.org" || host.endsWith(".tmdb.org")) {
                     val url = r.url.toString()

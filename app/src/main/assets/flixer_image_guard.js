@@ -1,26 +1,31 @@
 /*
- * Flixer TMDB image firewall — JS half.
+ * TMDB image firewall — JS half (flixer + cinejoy).
  *
  * Registered as a DOCUMENT-START script in MainActivity.installScripts()
- * (WebViewCompat.addDocumentStartJavaScript, all origins). This is the fix for
- * the flixer PowerVR crash: it must run in every frame BEFORE flixer's own
- * scripts append the ~180 TMDB posters, so its allowlist sync fires while the
- * intro burst is happening. (An earlier version was injected only from
- * onPageCommitVisible via evaluateJavascript — too late; sync() saw count:0
- * because images weren't laid out yet, the allowlist stayed empty, and the full
- * burst still hit the GPU → SIGSEGV in KEGLReleaseRenderTarget.)
+ * (WebViewCompat.addDocumentStartJavaScript, all origins). It must run in every
+ * frame BEFORE the page's scripts append the TMDB poster grids, so its allowlist
+ * sync fires while the intro burst is happening. (An earlier version was injected
+ * only from onPageCommitVisible via evaluateJavascript — too late; sync() saw
+ * count:0 because images weren't laid out yet, the allowlist stayed empty, and
+ * the full burst still hit the GPU → SIGSEGV in KEGLReleaseRenderTarget.)
  *
  * Chromium 118 on API 25: NO `??` or `?.` operators.
  *
- * Purpose: flixer's intro burst loads ~180 TMDB poster images at once. Each
- * decoded image becomes a GPU texture; on the PowerVR GPU that burst crashes
- * the renderer (SIGSEGV in KEGLReleaseRenderTarget). The native layer
- * (shouldInterceptRequest) serves a 1x1 transparent pixel for any
- * image.tmdb.org URL that is NOT in the allowlist. This script keeps that
- * allowlist in sync with the set of TMDB images that are actually visible,
- * so only the ~24 on-screen posters get real textures.
+ * Purpose: poster-grid sites (flixer's ~180-poster intro burst; cinejoy's lazy
+ * grid) load many TMDB poster images. Each decoded image becomes a GPU texture;
+ * on the PowerVR GPU that load crashes the renderer (SIGSEGV in
+ * KEGLReleaseRenderTarget). Two mechanisms cut the load:
+ *   1. VIRTUALIZE: strip `src` from off-screen TMDB posters so the browser never
+ *      requests/decodes them; restore `src` when they scroll into view. This is
+ *      the primary fix — it stops the request/decode/composite work entirely.
+ *   2. 1x1 FIREWALL: the native layer (shouldInterceptRequest) serves a 1x1
+ *      transparent pixel for any image.tmdb.org URL NOT in the allowlist, as a
+ *      backstop for anything that slips past virtualization.
+ * This script keeps the allowlist in sync with the set of TMDB images that are
+ * actually visible (within a pre-load margin), so only on-screen posters get
+ * real textures.
  *
- * VERIFIED (Oct 7 2026): on the Fire TV, the burst now produces ~125
+ * VERIFIED (Oct 7 2026, flixer): the burst now produces ~125
  * tmdb_image_blocked events and the allowlist climbs 0→10→1 as posters scroll
  * into view; no crash. Side effect: flixer's own "Emergency intro bypass"
  * fires because the 1x1 posters never finish the intro animation — harmless.
@@ -50,9 +55,10 @@
   window.__flixerImgGuard = true;
 
   try {
-    // Only act on flixer hosts (flixer.gd / *.flixer.gd / flixer.su / *.flixer.su).
+    // Only act on guarded poster-grid hosts: flixer (flixer.gd / *.flixer.gd /
+    // flixer.su / *.flixer.su) and cinejoy (cinejoy.pk / *.cinejoy.pk).
     var host = (location.host || '').toLowerCase();
-    if (!/(^|\.)flixer\.(gd|su)$/.test(host)) { return; }
+    if (!/(^|\.)flixer\.(gd|su)$|(^|\.)cinejoy\.pk$/.test(host)) { return; }
 
     var MAX = 24;            // cap on allowlist size (most-recently-visible first)
     var ROOT_MARGIN = '200px'; // pre-load band around the viewport
@@ -139,6 +145,11 @@
       if (syncing) { return; }
       syncing = true;
       try {
+        // First, virtualize: strip src from off-screen TMDB posters (so the
+        // browser never requests/decodes them) and restore src for the ones that
+        // have scrolled into the pre-load band. Must run before the allowlist is
+        // rebuilt so restored images carry their real src when we read them.
+        virtualize();
         // Rebuild the list from the live DOM so it always reflects reality.
         var imgs = document.querySelectorAll('img');
         var list = [];
