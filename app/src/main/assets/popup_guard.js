@@ -251,7 +251,9 @@
   function killOverlays() {
     if (!enabled()) return;
     // Find the video we care about: the largest visible <video> in this frame.
-    var video = null, videoArea = 0;
+    // It may not exist (e.g. the site's home page) — the floating-popup rules below
+    // still apply, which is what catches ad popups before a movie has started.
+    var video = null, videoArea = 0, vr = null;
     var vids;
     try { vids = document.getElementsByTagName('video'); } catch (e) { return; }
     for (var v = 0; v < vids.length; v++) {
@@ -260,9 +262,11 @@
       var a = r.width * r.height;
       if (a > videoArea) { videoArea = a; video = vids[v]; }
     }
-    if (!video || videoArea < 10000) return;   // no real video here
-    var vr;
-    try { vr = video.getBoundingClientRect(); } catch (e) { return; }
+    var haveVideo = video && videoArea >= 10000;
+    if (haveVideo) {
+      try { vr = video.getBoundingClientRect(); } catch (e) { vr = null; }
+    }
+    var viewportArea = (window.innerWidth || 0) * (window.innerHeight || 0);
 
     var els;
     try { els = document.querySelectorAll('div, span, a, iframe'); } catch (e) { return; }
@@ -275,45 +279,77 @@
       if (s.display === 'none' || s.visibility === 'hidden') continue;
       var r;
       try { r = el.getBoundingClientRect(); } catch (e) { continue; }
-      // (a) covers a significant portion of the video (at least 10% of the video's area, and overlaps it)
-      var overlapLeft = Math.max(r.left, vr.left);
-      var overlapTop = Math.max(r.top, vr.top);
-      var overlapRight = Math.min(r.right, vr.right);
-      var overlapBottom = Math.min(r.bottom, vr.bottom);
-      var overlapArea = Math.max(0, overlapRight - overlapLeft) * Math.max(0, overlapBottom - overlapTop);
-      if (overlapArea < videoArea * 0.1) continue;
-      // (b) is positioned above the video in the stacking order.
-      //     An element that is not positioned (static) and has no z-index cannot paint
-      //     above a positioned sibling, so it is not the culprit.
-      var positioned = s.position === 'fixed' || s.position === 'absolute' || s.position === 'relative';
+      var floating = s.position === 'fixed' || s.position === 'absolute';
       var z = parseInt(s.zIndex, 10);
-      var above = positioned && (s.zIndex !== 'auto' ? z >= 0 : true);
-      if (!above) continue;
-      // (c) is NOT real player UI: skip the video itself, its control bar, and any
-      //     element that contains interactive controls (buttons, inputs, selects).
-      var hasControls = false;
-      try { hasControls = !!(el.querySelector && el.querySelector('button, [role="button"], input, select, video')); } catch (e) { /* ignore */ }
-      // Exception: if the element contains ad/popup text, it's an ad layer even if it has buttons.
-      var isAdPopup = false;
-      if (hasControls) {
-        try {
-          var text = (el.textContent || '').toLowerCase();
-          isAdPopup = /install|adsblocker|adblock|block ads|free|download|get (it|this)|sign ?up|subscribe|premium|upgrade/.test(text) &&
-            text.length < 200;  // ad popups are short; real player UI has more text
-        } catch (e) { /* ignore */ }
+      var hasZ = !isNaN(z);
+      var area = r.width * r.height;
+      // Ad/popup copy: short promotional text.
+      var text = '';
+      try { text = (el.textContent || '').toLowerCase(); } catch (e) { /* ignore */ }
+      var hasAdText = text.length > 0 && text.length < 400 &&
+        /vpn|free|download|install|sign ?up|subscribe|premium|upgrade|no ads|remove ads|adblock|block ads|get (it|this)|watch (it|this)|claim|offer|trial/.test(text);
+      // (a) is an ad overlay. Three signals, any one of which is enough:
+      //     1. a floating iframe with a very high z-index and small size — an ad
+      //        creative. Works with or without a video (home pages, pre-roll). The
+      //        high-z + small-size bar keeps a large, low-z player iframe safe.
+      //     2. covers a significant part of the video (needs a video on the page).
+      //     3. a floating element carrying ad copy.
+      var isIframeAd = el.tagName === 'IFRAME' && floating && hasZ && z >= 1000 &&
+        area >= 1000 && (viewportArea <= 0 || area < viewportArea * 0.25);
+      var coversVideo = false;
+      if (haveVideo && vr) {
+        // Only a positioned element can paint above the video in the stacking order;
+        // a static, z-less sibling is not the culprit.
+        var positioned = floating || s.position === 'relative';
+        var above = positioned && (s.zIndex !== 'auto' ? z >= 0 : true);
+        var overlapArea = Math.max(0, Math.min(r.right, vr.right) - Math.max(r.left, vr.left)) *
+          Math.max(0, Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top));
+        coversVideo = above && overlapArea >= videoArea * 0.1;
       }
-      if (hasControls && !isAdPopup) continue;
-      // This is the ad layer. Disable it so taps pass through to the player.
-      el.style.pointerEvents = 'none';
+      var isFloatingAdText = floating && hasAdText;
+      if (!isIframeAd && !coversVideo && !isFloatingAdText) {
+        // Reconnaissance: log floating high-z elements we did NOT kill, once each,
+        // so a popup that slips through can be identified from the session log.
+        if (floating && hasZ && z >= 100 && area >= 1000 && !el.getAttribute('data-fslogged')) {
+          try { el.setAttribute('data-fslogged', '1'); } catch (e) { /* ignore */ }
+          try {
+            if (window.Buccaneer && typeof window.Buccaneer.diagnosticEvent === 'function') {
+              window.Buccaneer.diagnosticEvent('floating_seen', JSON.stringify({
+                tag: el.tagName,
+                src: el.tagName === 'IFRAME' ? (el.src || '').substring(0, 80) : '',
+                pos: s.position,
+                z: s.zIndex,
+                x: Math.round(r.left), y: Math.round(r.top),
+                w: Math.round(r.width), h: Math.round(r.height),
+                text: text.replace(/\s+/g, ' ').trim().substring(0, 60)
+              }));
+            }
+          } catch (e) { /* ignore */ }
+        }
+        continue;
+      }
+      // (b) is NOT real player UI: skip elements that contain a video or that carry
+      //     interactive controls without ad copy (an ad popup may have its own buttons).
+      var containsVideo = false;
+      try { containsVideo = !!(el.querySelector && el.querySelector('video')); } catch (e) { /* ignore */ }
+      if (containsVideo) continue;
+      var hasControls = false;
+      try { hasControls = !!(el.querySelector && el.querySelector('button, [role="button"], input, select')); } catch (e) { /* ignore */ }
+      if (hasControls && !isIframeAd && !hasAdText) continue;
+      // Kill it. Floating popups are out of flow: hide them so they are gone, not just
+      // click-through. In-flow layers that cover the video become click-through so taps
+      // reach the player underneath.
+      if (floating) el.style.display = 'none';
+      else el.style.pointerEvents = 'none';
       try {
         if (window.Buccaneer && typeof window.Buccaneer.diagnosticEvent === 'function') {
-          window.Buccaneer.diagnosticEvent('overlay_disabled', JSON.stringify({
+          window.Buccaneer.diagnosticEvent('overlay_killed', JSON.stringify({
             cls: (el.className && typeof el.className === 'string' ? el.className : '').substring(0, 60),
             tag: el.tagName,
             pos: s.position,
             z: s.zIndex,
-            op: s.opacity,
-            reason: 'covers_video'
+            reason: isIframeAd ? 'floating_iframe' : (coversVideo ? 'covers_video' : 'floating_ad'),
+            text: text.replace(/\s+/g, ' ').trim().substring(0, 60)
           }));
         }
       } catch (e) { /* ignore */ }
