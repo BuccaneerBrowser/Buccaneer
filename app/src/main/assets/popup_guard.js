@@ -345,6 +345,18 @@
       // site's fullscreen may put the player's wrapper at a high z-index too.)
       var isPlayerChain = !!(playerIframe && el.contains && el.contains(playerIframe));
       var isHighZAd = floating && hasZ && z >= 1000000 && area >= 1000 && !isPlayerChain;
+      // (a4) full-viewport click-catcher: a positioned element covering >=90% of the
+      // viewport at a high z-index, on a page where covers_video can't fire (no <video>
+      // yet — home, show/season, pre-roll) and the z-index is below the 1,000,000
+      // high-z threshold. Ad injectors commonly use 9999 / 1000 for these (seen on
+      // coreflix/nippleflix and movy, 2026-10-22). Legitimate full-viewport UI (modals,
+      // the player container) contains controls or a video, so the containsVideo /
+      // hasControls protections below still spare it; the player and its container
+      // chain are exempt via isPlayerChain.
+      var vpOverlap = Math.max(0, Math.min(r.right, window.innerWidth) - Math.max(r.left, 0)) *
+        Math.max(0, Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0));
+      var coversViewport = floating && hasZ && z >= 1000 &&
+        viewportArea > 0 && vpOverlap >= viewportArea * 0.9 && !isPlayerChain;
       var coversVideo = false;
       if (haveVideo && vr) {
         // Only a positioned element can paint above the video in the stacking order;
@@ -355,7 +367,7 @@
           Math.max(0, Math.min(r.bottom, vr.bottom) - Math.max(r.top, vr.top));
         coversVideo = above && overlapArea >= videoArea * 0.1;
       }
-      if (!isIframeAd && !coversVideo && !isHighZAd) {
+      if (!isIframeAd && !coversVideo && !isHighZAd && !coversViewport) {
         // Reconnaissance: log floating high-z elements we did NOT kill, once each,
         // so a popup that slips through can be identified from the session log.
         if (floating && hasZ && z >= 100 && area >= 1000 && !el.getAttribute('data-fslogged')) {
@@ -399,23 +411,115 @@
             tag: el.tagName,
             pos: s.position,
             z: s.zIndex,
-            reason: isIframeAd ? 'floating_iframe' : (isHighZAd ? 'high_z_ad' : 'covers_video'),
+            reason: isIframeAd ? 'floating_iframe' : (isHighZAd ? 'high_z_ad' : (coversViewport ? 'viewport_catcher' : 'covers_video')),
             text: text.replace(/\s+/g, ' ').trim().substring(0, 60)
           }));
         }
       } catch (e) { /* ignore */ }
     }
   }
+
+  // Minimal popup scan for flixer. The full-DOM walk in killOverlays
+  // (querySelectorAll over every div/span/a/iframe) triggers the PowerVR driver
+  // crash during flixer's intro animation, so the heavy scanner stays OFF on
+  // flixer. But flixer still gets inline ad click-catchers that the window.open
+  // guard cannot catch. This checks only a handful of elements (body's direct
+  // children + iframes) and applies only the cheap high-z and full-viewport
+  // rules. It is CPU-cheap and does not add the DOM-walk load that crashed the
+  // GPU driver. The main player iframe (largest iframe with a real src) and its
+  // container chain are exempt, so the player is never killed.
+  function killCatchers() {
+    if (!enabled()) return;
+    var viewportArea = (window.innerWidth || 0) * (window.innerHeight || 0);
+    if (viewportArea <= 0) return;
+    // Main player iframe: the largest iframe with a real (non-blank, non-srcdoc) src.
+    var playerIframe = null, playerArea = 0;
+    try {
+      var ifrList = document.getElementsByTagName('iframe');
+      for (var pi = 0; pi < ifrList.length; pi++) {
+        var f = ifrList[pi];
+        var fs; try { fs = getComputedStyle(f); } catch (e) { continue; }
+        if (fs.display === 'none' || fs.visibility === 'hidden') continue;
+        var fsrc = (f.src || '').toLowerCase();
+        if (!fsrc || fsrc === 'about:blank' || fsrc.indexOf('srcdoc') === 0) continue;
+        var fr; try { fr = f.getBoundingClientRect(); } catch (e) { continue; }
+        var fa = fr.width * fr.height;
+        if (fa > playerArea) { playerArea = fa; playerIframe = f; }
+      }
+    } catch (e) { }
+    // Restricted element set: body's direct children + all iframes. NOT the whole DOM.
+    var els = [];
+    try {
+      var body = document.body;
+      if (body) { for (var i = 0; i < body.children.length; i++) els.push(body.children[i]); }
+      var ifr = document.getElementsByTagName('iframe');
+      for (var j = 0; j < ifr.length; j++) els.push(ifr[j]);
+    } catch (e) { return; }
+    for (var k = 0; k < els.length; k++) {
+      var el = els[k];
+      if (!el || el === playerIframe) continue;
+      var s; try { s = window.getComputedStyle(el); } catch (e) { continue; }
+      if (s.pointerEvents === 'none') continue;
+      if (s.display === 'none' || s.visibility === 'hidden') continue;
+      var r; try { r = el.getBoundingClientRect(); } catch (e) { continue; }
+      var floating = s.position === 'fixed' || s.position === 'absolute';
+      if (!floating) continue;
+      var z = parseInt(s.zIndex, 10);
+      var hasZ = !isNaN(z);
+      var area = r.width * r.height;
+      // Reconnaissance: log floating high-z elements (killed or not), once each,
+      // so we can see exactly what flixer's popups are from the session log.
+      if (hasZ && z >= 100 && area >= 1000 && !el.getAttribute('data-fslogged')) {
+        try { el.setAttribute('data-fslogged', '1'); } catch (e) { }
+        diagnostic('floating_seen', {
+          tag: el.tagName,
+          src: el.tagName === 'IFRAME' ? (el.src || '').substring(0, 80) : '',
+          pos: s.position, z: s.zIndex,
+          x: Math.round(r.left), y: Math.round(r.top),
+          w: Math.round(r.width), h: Math.round(r.height)
+        });
+      }
+      if (!hasZ || z < 1000) continue;
+      var isIframeAd = el.tagName === 'IFRAME' && area >= 1000 && area < viewportArea * 0.25;
+      var vpOverlap = Math.max(0, Math.min(r.right, window.innerWidth) - Math.max(r.left, 0)) *
+        Math.max(0, Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0));
+      var isViewportCatcher = vpOverlap >= viewportArea * 0.9;
+      if (!isIframeAd && !isViewportCatcher) continue;
+      // Exempt the player and its container chain.
+      if (playerIframe && el.contains && el.contains(playerIframe)) continue;
+      // Protections: skip if it contains a video or real controls.
+      var containsVideo = false;
+      try { containsVideo = !!(el.querySelector && el.querySelector('video')); } catch (e) { }
+      if (containsVideo) continue;
+      var hasControls = false;
+      try { hasControls = !!(el.querySelector && el.querySelector('button, [role="button"], input, select')); } catch (e) { }
+      if (hasControls && !isIframeAd) continue;
+      el.style.display = 'none';
+      diagnostic('overlay_killed', {
+        cls: (el.className && typeof el.className === 'string' ? el.className : '').substring(0, 60),
+        tag: el.tagName,
+        pos: s.position,
+        z: s.zIndex,
+        reason: isIframeAd ? 'floating_iframe' : 'viewport_catcher'
+      });
+    }
+  }
+
   // Scanning every element every 1500 ms is heavy on big pages. Only re-check after the DOM
   // changes (debounced), with a slow interval as a fallback for style-only changes.
-  // Flixer: skip the overlay scanner entirely. The MutationObserver + 5s interval that
-  // walks every element in the DOM adds GPU/CPU load that triggers the PowerVR driver
-  // crash during flixer's intro animation. Flixer has few popups; the window.open guard
-  // above still protects it.
+  // Flixer: the full-DOM walk (MutationObserver + interval over every element)
+  // triggers the PowerVR driver crash during flixer's intro animation, so the
+  // heavy scanner stays OFF. But flixer still gets inline ad click-catchers that
+  // the window.open guard cannot catch, so run the MINIMAL killCatchers scan
+  // instead: a handful of elements (body's children + iframes), cheap rules only,
+  // slow interval, no MutationObserver.
   var __pgHost = '';
   try { __pgHost = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
   var __pgIsFlixer = /(^|\.)flixer\.(gd|su)$/.test(__pgHost);
-  if (!__pgIsFlixer) {
+  if (__pgIsFlixer) {
+    killCatchers();
+    setInterval(killCatchers, 5000);
+  } else {
     killOverlays();
     var scanTimer = 0;
     function scheduleScan() {
