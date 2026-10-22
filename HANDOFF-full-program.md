@@ -340,11 +340,16 @@ Z.** Read this before touching any subsystem.
   `Page.navigate` does **not** hide the start page (only the app's `navigateUrl`
   does), so FF/rewind appear dead after a CDP navigation. Test transport keys after
   a *real* app navigation.
-- **The cross-frame seek is silent on fallback.** When `__fb.seek` returns
-  `frame`/`none` (player in a cross-origin iframe), the code sends DPAD_LEFT/RIGHT
-  keys to the page with **no diagnostic and no OSD** — if the iframe isn't focused,
-  the keys vanish and the user sees nothing. Check `seek_result`/`seek_fallback`
-  events; a missing result means the eval deadline fired and the fallback ran.
+- **Cross-frame seek: `frame` is a SUCCESS, not a failure.** `__fb.seek` returns
+  `ok` (seeked the video directly), `frame` (the command was forwarded to a
+  cross-origin player frame, whose own helper runs it — **this is success**), or
+  `none`/`failed` (no video found / the seek didn't take). Only the last case runs
+  the DPAD_LEFT/RIGHT fallback (after `__fb.focusTarget`), and that fallback **does**
+  show an OSD ("Native seek steps depend on this player"). There is **no dedicated
+  seek diagnostic event** — to diagnose a dead FF/rewind, read the `key` event's
+  `handler` field (which branch consumed the key) and `media_health` (playback
+  state). Do not look for `seek_result`/`seek_fallback` — those events are not
+  emitted anywhere in the code.
 - **Measuring seeks on a playing video confounds the delta.** A +10s seek measured
   over a 3.5s wait reads ~+6.5 net (playback eats into it). **Pause first**, then
   seek, then measure — paused deltas are exact.
@@ -687,8 +692,10 @@ GPU crash, the watchdog reopens the URL but **not** the video/scroll position
   the bounded poke.
 - **"FF/rewind does nothing"** → read the `key` event's `handler` field. If it's
   `startPage`, the start page is on top (navigate via the app, not CDP). If it's
-  `transport`, check `seek_result`/`seek_fallback` — a missing result means the
-  cross-frame eval timed out and the silent DPAD fallback ran.
+  `transport`, the seek was attempted — there is **no dedicated seek event**, so
+  check `media_health` (did the position actually change?) and whether the player
+  is in a cross-origin frame. A `frame` result from `__fb.seek` is a success (the
+  frame's own helper ran it); only `none`/`failed` runs the DPAD fallback.
 - **"A popup got through"** → check `floating_seen` for z ≥ 1,000,000 (a high-z ad
   that wasn't killed) or a new ad structure the structural rules don't match.
 - **"The Play button / hero content disappeared"** → you (or a prior change)
