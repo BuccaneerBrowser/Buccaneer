@@ -2,22 +2,6 @@
 
 A lightweight web browser for Android TV, designed for remote control navigation and streaming content.
 
-## What's new in 2.3.2
-
-- **Video stays smooth after long sessions** — residual GPU state from video playback is now cleared when you leave a page, fixing the frame drops and video skipping that built up over a long streaming session.
-- **Ad redirects blocked** — a new anchor-based guard catches server-side ad redirects (301/302) that the old guard missed and returns you to the page you were on.
-- **Poster grids are navigable** — the floating preview no longer pops up when you focus a poster with the D-pad; press OK to open the movie.
-
-Also in 2.3.2: some streaming sites no longer force fullscreen when playback starts; dead videos (CDN failures) auto-retry once before giving up; fixed blank posters on some streaming sites.
-
-## What's new in 2.3.1
-
-- **Popup guard** — now blocks high-z injected ad overlays, floating ad popups, and full-viewport catchers; exempts the main player iframe so it doesn't break video UI.
-- **Fullscreen** — replaced native fullscreen with page-level (CSS) fullscreen; video auto-resumes if entering fullscreen pauses it; FF/rewind and play/pause fixed for cross-origin players.
-- **TMDB image virtualization** — off-screen posters are virtualized to reduce GPU load and prevent crashes on poster-heavy streaming sites.
-- **Search** — Enter/GO always submits the search form, not just when the page lets the key through.
-- **Menu** — removed "Show playback controls" and "Popup Guard" from the main menu; the Popup Guard toggle moved to Settings.
-
 ## Features
 
 - **TV-optimized UI** — Full remote control navigation with D-pad, no mouse or touch required
