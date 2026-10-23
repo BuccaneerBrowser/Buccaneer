@@ -111,21 +111,24 @@ class StartPage @JvmOverloads constructor(
         header.gravity = Gravity.CENTER_VERTICAL
 
         val tagLeft = ui.text("Where's me buccaneers?", 15, Colors.SUBTLE)
-        header.addView(tagLeft, LinearLayout.LayoutParams(WRAP, WRAP))
+        tagLeft.gravity = Gravity.RIGHT
+        val tllp = LinearLayout.LayoutParams(0, WRAP, 1f)
+        tllp.rightMargin = ui.u(10)
+        header.addView(tagLeft, tllp)
 
         val logo = ImageView(context)
         logo.setImageResource(R.drawable.buccaneer_logo)
         logo.scaleType = ImageView.ScaleType.FIT_CENTER
         val lslp = LinearLayout.LayoutParams(ui.u(36), ui.u(36))
-        lslp.leftMargin = ui.u(10)
         header.addView(logo, lslp)
 
         val tagRight = ui.text("Under me bucc'n hat!", 15, Colors.SUBTLE)
-        val trlp = LinearLayout.LayoutParams(WRAP, WRAP)
+        tagRight.gravity = Gravity.LEFT
+        val trlp = LinearLayout.LayoutParams(0, WRAP, 1f)
         trlp.leftMargin = ui.u(10)
         header.addView(tagRight, trlp)
 
-        content.addView(header, LinearLayout.LayoutParams(WRAP, WRAP))
+        content.addView(header, LinearLayout.LayoutParams(MATCH, WRAP))
 
         val f = folder
         val tiles = ArrayList<View>()

@@ -57,6 +57,8 @@
   try {
     // Only act on guarded poster-grid hosts: flixer (flixer.gd / *.flixer.gd /
     // flixer.su / *.flixer.su) and cinejoy (cinejoy.pk / *.cinejoy.pk).
+    // (nippleflix was removed: its in-view posters don't match the allowlist,
+    // so the native 1x1 firewall blanked the home-page grid.)
     var host = (location.host || '').toLowerCase();
     if (!/(^|\.)flixer\.(gd|su)$|(^|\.)cinejoy\.pk$/.test(host)) { return; }
 

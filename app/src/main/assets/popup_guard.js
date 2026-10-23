@@ -447,9 +447,16 @@
         if (fa > playerArea) { playerArea = fa; playerIframe = f; }
       }
     } catch (e) { }
-    // Restricted element set: body's direct children + all iframes. NOT the whole DOM.
+    // Restricted element set: <html>'s and <body>'s direct children + all iframes.
+    // NOT the whole DOM. Ad injectors attach their overlay divs to <html> (a sibling
+    // of <body>), which body.children alone misses. <head>/<body> themselves are not
+    // position:fixed/absolute, so the floating check below filters them out before any
+    // heavy work — this stays far under the DOM-walk load that crashed the PowerVR
+    // driver, which is why flixer uses this minimal scanner at all.
     var els = [];
     try {
+      var html = document.documentElement;
+      if (html) { for (var h = 0; h < html.children.length; h++) els.push(html.children[h]); }
       var body = document.body;
       if (body) { for (var i = 0; i < body.children.length; i++) els.push(body.children[i]); }
       var ifr = document.getElementsByTagName('iframe');
@@ -484,7 +491,14 @@
       var vpOverlap = Math.max(0, Math.min(r.right, window.innerWidth) - Math.max(r.left, 0)) *
         Math.max(0, Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0));
       var isViewportCatcher = vpOverlap >= viewportArea * 0.9;
-      if (!isIframeAd && !isViewportCatcher) continue;
+      // Abnormally high z-index (>= 1,000,000): an injected ad overlay DIV. Ad
+      // injectors force their creative to the top with the 32-bit max z-index
+      // (2147483646); legitimate page UI never reaches 1,000,000. Mirrors the
+      // isHighZAd rule in killOverlays() so flixer's minimal scanner catches the
+      // same overlays. The player + container chain are exempt below, and the
+      // video/controls protections still apply.
+      var isHighZAd = z >= 1000000 && area >= 1000;
+      if (!isIframeAd && !isViewportCatcher && !isHighZAd) continue;
       // Exempt the player and its container chain.
       if (playerIframe && el.contains && el.contains(playerIframe)) continue;
       // Protections: skip if it contains a video or real controls.
@@ -500,7 +514,7 @@
         tag: el.tagName,
         pos: s.position,
         z: s.zIndex,
-        reason: isIframeAd ? 'floating_iframe' : 'viewport_catcher'
+        reason: isIframeAd ? 'floating_iframe' : (isHighZAd ? 'high_z_ad' : 'viewport_catcher')
       });
     }
   }

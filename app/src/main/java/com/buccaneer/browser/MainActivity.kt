@@ -353,12 +353,22 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var pendingClearHistory = false
     private var deferredNavigation: (() -> Unit)? = null
     private var crashReloadCount = 0
+    // ---- redirect guard (anchor-based ad-redirect detection) ----
+    // The URL the user explicitly navigated to is the "anchor". A main-frame load to a
+    // different domain, with no user interaction since the anchor and within the window,
+    // is an ad redirect. Server-side 301/302 chains bypass shouldOverrideUrlLoading, so
+    // they are caught here at page_started (see docs/review/blocker-redesign.md).
+    private var anchorUrl: String? = null
+    private var anchorAt: Long = 0L
+    private var anchorInteraction: Long = 0L
+    private var lastRedirectBlockAt: Long = 0L
     private var softwareRendering = false
     private var scriptsAtDocumentStart = false
     private var uiScriptsAtDocumentStart = false
     private var guardJs = ""
     private var helpersJs = ""
     private var flixerImageGuardJs = ""
+    private var flixerPosterGuardJs = ""
 
     // TMDB image virtualization: allowlist of image URLs currently visible on a
     // guarded poster-grid host. When such a host is the active page,
@@ -378,6 +388,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         return host == "flixer.gd" || host.endsWith(".flixer.gd") ||
             host == "flixer.su" || host.endsWith(".flixer.su") ||
             host == "cinejoy.pk" || host.endsWith(".cinejoy.pk")
+        // nippleflix removed: its in-view posters didn't match the allowlist, so
+        // the native 1x1 firewall blanked the home-page grid (see flixer_image_guard.js).
     }
 
     // GPU render-reset: flixer crashes (KEGLReleaseRenderTarget) when loaded
@@ -385,6 +397,13 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     // PowerVR driver over the edge. Track the last non-flixer host so we can
     // force a render reset when transitioning video-site -> flixer.
     @Volatile private var lastNonFlixerHost = ""
+
+    // GPU render-reset (general): residual video GPU state accumulates across
+    // video sites and tips the PowerVR driver over the edge — frame drops after a
+    // long session, and black video (compositing fails, audio is fine). Set when a
+    // page starts real playback; consumed by a render reset on the next navigation
+    // away, so the state is cleared before the next site's video composites.
+    @Volatile private var videoActive = false
 
     // ---- remote pointer
     private var cx = 0f
@@ -511,6 +530,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         guardJs = readAsset(this, "popup_guard.js")
         helpersJs = readAsset(this, "page_helpers.js")
         flixerImageGuardJs = readAsset(this, "flixer_image_guard.js")
+        flixerPosterGuardJs = readAsset(this, "flixer_poster_guard.js")
         fmhyThemeJs = readAsset(this, "fmhy_theme.js")
         tvUiJs = readAsset(this, "tv_ui.js")
         seekClickJs = readAsset(this, "seek_click.js")
@@ -866,6 +886,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (scheme == "http" || scheme == "https") {
             if (mainFrame && guard.blocksNavigation(view?.url, uri)) {
                 DiagnosticLog.record(this, "redirect_blocked", JSONObject().apply {
+                    put("mechanism", "native")
                     put("initiator", DiagnosticLog.safeUrl(view?.url))
                     put("target", DiagnosticLog.safeUrl(uri.toString()))
                 })
@@ -935,6 +956,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 put("url", DiagnosticLog.safeUrl(url))
                 put("host", try { Uri.parse(url ?: "").host ?: "" } catch (_: Throwable) { "" })
             })
+            maybeBlockAdRedirect(url)
             injectFallback(view)
             cursor.loading = true
             if (!startPage.shown()) {
@@ -995,6 +1017,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             // Inject the image guard JS (idempotent — safe to call repeatedly).
             if (isImageGuarded) {
                 try { view?.evaluateJavascript(flixerImageGuardJs, null) } catch (_: Throwable) { }
+            }
+            // Inject the poster hover-preview guard (flixer only). Keeps the
+            // DPAD-focus-triggered floating preview hidden so the grid is
+            // navigable; posters still open on click (DPAD OK -> movie page).
+            if (isFlixer) {
+                try { view?.evaluateJavascript(flixerPosterGuardJs, null) } catch (_: Throwable) { }
             }
         }
 
@@ -1452,6 +1480,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             runOnUiThread {
                 if (epoch == pageEpoch && foreground && pageAvailable() && id.startsWith(documentToken + ":")) {
                     mediaOwner = id.take(240)
+                    videoActive = true
                     DiagnosticLog.record(this@MainActivity, "media_owner_started", JSONObject().put("frame", id.take(120)))
                 }
             }
@@ -1505,6 +1534,38 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         }
     }
 
+    /**
+     * Anchor-based ad-redirect detection. Catches server-side 301/302 redirect chains that
+     * bypass shouldOverrideUrlLoading (the native blocksNavigation never fires for them).
+     * A main-frame load to a different domain, with no user interaction since the anchor
+     * navigation and within the window, is treated as an ad redirect and the user is
+     * returned to the anchor. See docs/review/blocker-redesign.md.
+     */
+    private fun maybeBlockAdRedirect(url: String?) {
+        if (!prefs.getBoolean("redirectGuardEnabled", true)) return
+        val anchor = anchorUrl ?: return
+        if (url == null || !url.startsWith("http")) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - anchorAt > prefs.getLong("redirectWindowMs", 30_000L)) return   // (c) window
+        if (interactionSerial != anchorInteraction) return                          // (b) user interacted
+        val aHost = try { PopupGuard.cleanHost(Uri.parse(anchor).host ?: "") } catch (_: Throwable) { "" }
+        val tHost = try { PopupGuard.cleanHost(Uri.parse(url).host ?: "") } catch (_: Throwable) { "" }
+        if (aHost.isEmpty() || tHost.isEmpty()) return
+        if (PopupGuard.hostMatches(tHost, aHost) || PopupGuard.hostMatches(aHost, tHost)) return  // (a) same domain
+        val safe = prefs.getStringSet("safeDomains", emptySet()) ?: emptySet()
+        if (safe.any { d -> PopupGuard.hostMatches(tHost, d) }) return              // safe-domain escape
+        val cooldown = now - lastRedirectBlockAt
+        lastRedirectBlockAt = now
+        DiagnosticLog.record(this, "redirect_blocked", JSONObject().apply {
+            put("mechanism", "anchor")
+            put("anchor", DiagnosticLog.safeUrl(anchor))
+            put("target", DiagnosticLog.safeUrl(url))
+            put("elapsedMs", now - anchorAt)
+        })
+        noteBlocked("a redirect")
+        if (cooldown > 2000L) navigateUrl(anchor, userInitiated = false)
+    }
+
     // =====================================================================================
     //  Navigation
     // =====================================================================================
@@ -1517,6 +1578,11 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (userInitiated && crashReloadCount > 0) clearCrashRecovery()
         prepareNavigation()
         DiagnosticLog.record(this, if (userInitiated) "user_navigation" else "automatic_navigation", JSONObject().put("url", DiagnosticLog.safeUrl(url)))
+        if (userInitiated) {
+            anchorUrl = url
+            anchorAt = SystemClock.elapsedRealtime()
+            anchorInteraction = interactionSerial
+        }
         if (startPage.shown()) {
             startPage.hide()
             pendingClearHistory = true
@@ -1609,6 +1675,28 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (current()) {
                 // Script completion/timeout is NOT proof of native resource release.
                 DiagnosticLog.record(this, reason)
+                // GPU render reset (general): clear residual video GPU state when
+                // navigating away from a page that had real playback. The flixer
+                // reset in onPageCommitVisible only covers the video-site -> flixer
+                // edge; this covers video-site -> video-site and video-site -> other,
+                // where residual state otherwise accumulates and degrades the next
+                // video (frame drops, black surface). Fires after media teardown,
+                // before the new page loads. Same proven pauseTimers/invalidate/
+                // resumeTimers dance as the flixer reset.
+                if (videoActive) {
+                    videoActive = false
+                    DiagnosticLog.record(this, "video_render_reset")
+                    try {
+                        source.pauseTimers()
+                        source.invalidate()
+                        handler.postDelayed({
+                            try {
+                                source.resumeTimers()
+                                source.invalidate()
+                            } catch (_: Throwable) { }
+                        }, 150)
+                    } catch (_: Throwable) { }
+                }
                 commitWhenForeground()
             }
         })
@@ -2578,7 +2666,18 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (textMode == TextMode.PAGE) closeKeypad()
         customView = view
         customCallback = callback
-        fullscreenBox.addView(view, FrameLayout.LayoutParams(MATCH, MATCH))
+        // Defensive: if the view still has a parent (a renderer-recovery path can
+        // leave a stale customView, or the page can re-request fullscreen), remove
+        // it first — otherwise addView throws "child already has a parent" on the
+        // main thread. Mirrors the guard in destroyBrowser / disposePopup.
+        try { (view.parent as? ViewGroup)?.removeView(view) } catch (_: Throwable) {}
+        // Center the video in the box: the WebView's fullscreen VideoView measures to the
+        // video's own aspect ratio (a 2.39:1 film is ~1920x780 on this 16:9 screen), and
+        // FrameLayout's default top-left gravity pins it to the top with a black bar below.
+        // A same-aspect (16:9) video fills the box exactly, so the gravity is a no-op there.
+        val lp = FrameLayout.LayoutParams(MATCH, MATCH)
+        lp.gravity = Gravity.CENTER
+        fullscreenBox.addView(view, lp)
         fullscreenBox.visibility = View.VISIBLE
         fullscreenBox.keepScreenOn = true
         hideCursor()
@@ -3148,16 +3247,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             eval("window.__tvUi ? __tvUi.fitMenus() : 0")
             toast("Adjusted recognized dropdown menus")
         })
-        // 9. Show playback
-        items.add(MenuItem("Show playback controls") {
-            refreshOsd(75, "Select position • Hold FF/Rewind for larger skips")
-            if (customView == null && !cssFullscreenActive) showCursor()
-        })
-        // 10. Popup
-        val guardLabel = "Popup Guard: " + (if (guard.enabled) "ON" else "OFF") +
-            (if (blockedCount > 0) "  ($blockedCount blocked)" else "")
-        items.add(MenuItem(guardLabel) { toggleGuard() })
-        // 11. Block redirects
+        // 9. Block redirects
         val host: String? = if (url != null) {
             try {
                 Uri.parse(url).host
@@ -3172,11 +3262,11 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             val label = "Block redirects from $site: " + (if (guard.isProtected(site)) "ON" else "OFF")
             items.add(MenuItem(label) { toggleProtectedSite(site) })
         }
-        // 12. Back
+        // 10. Back
         items.add(MenuItem("Back") { navigateHistory(-1) })
-        // 13. Settings
+        // 11. Settings
         items.add(MenuItem("Settings...") { showSettings(0) })
-        // 14. Exit browser
+        // 12. Exit browser
         items.add(MenuItem("Exit browser") { finish() })
 
         showMenu("Menu", items, null)
@@ -3238,6 +3328,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private fun saveBookmark(name: String, url: String, folder: String) {
         if (BookmarkJobs.isBusy()) { toast("Wait for the bookmark transfer to finish"); return }
         editBookmarks { store.add(name, url, folder) }
+        // Auto-protect a bookmarked site: its off-site main-frame redirects (ad scripts)
+        // are blocked, same as the built-in streaming sites. Never removes protection.
+        try {
+            val host = Uri.parse(url).host
+            if (host != null) guard.protect(host)
+        } catch (_: Exception) { }
         startPage.refresh()
         toast("Bookmarked: $name" + (if (folder.isEmpty()) "" else "  (folder $folder)"))
     }
@@ -3674,6 +3770,11 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         items.add(MenuItem("Software rendering: " + (if (softwareRendering) "ON" else "OFF")) {
             toggleSoftwareRendering()
             showSettings(5)
+        })
+        items.add(MenuItem("Popup Guard: " + (if (guard.enabled) "ON" else "OFF") +
+            (if (blockedCount > 0) "  ($blockedCount blocked)" else "")) {
+            toggleGuard()
+            showSettings(6)
         })
         items.add(MenuItem("Diagnostics...") { showDiagnosticMenu() })
         showMenuAt("Settings", items, focus) { showMainMenu() }

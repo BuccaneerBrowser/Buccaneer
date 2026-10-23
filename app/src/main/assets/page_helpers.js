@@ -472,6 +472,68 @@
     if (window === window.top) cssFsNotifyApp(false); else cssFsPostParent(false);
   }
 
+  // Dead-video auto-retry: if the player's video never loads (stays 0x0 / readyState=0
+  // for ~8s — the HLS segment fetch failed, e.g. a flaky CDN), reload the page once to
+  // retry. The video element itself is 0x0, so we detect a "player" by the video's
+  // container being a reasonable size (>= 200x150), not the video's own rect. Bounded by a
+  // localStorage cooldown so a hard-down CDN doesn't cause an infinite reload loop.
+  function installDeadVideoRetry() {
+    if (window.__deadVideoRetryInstalled) return;
+    window.__deadVideoRetryInstalled = true;
+    var deadSince = 0;
+    var LS_KEY = '__deadVideoRetry';
+    var COOLDOWN_MS = 60000; // don't re-reload the same URL within 60s
+    var DEAD_MS = 8000; // a video dead for 8s is considered failed
+
+    function isDeadVideo(v) {
+      try {
+        if (v.videoWidth !== 0 || v.videoHeight !== 0) return false;
+        if (v.readyState !== 0) return false;
+        // Must be in a "player" container (>= 200x150), not a tiny/trailer video.
+        var el = v.parentElement || v;
+        for (var i = 0; i < 4 && el; i++) {
+          var r = el.getBoundingClientRect();
+          if (r.width >= 200 && r.height >= 150) return true;
+          el = el.parentElement;
+        }
+        return false;
+      } catch (e) { return false; }
+    }
+
+    function findDeadVideo() {
+      var all = [];
+      collect(document, 2, all);
+      for (var i = 0; i < all.length; i++) {
+        if (isDeadVideo(all[i])) return all[i];
+      }
+      return null;
+    }
+
+    setInterval(function () {
+      var v = findDeadVideo();
+      if (v) {
+        if (!deadSince) deadSince = Date.now();
+        if (Date.now() - deadSince >= DEAD_MS) {
+          try {
+            var now = Date.now();
+            var url = location.href;
+            var raw = localStorage.getItem(LS_KEY);
+            var last = raw ? JSON.parse(raw) : null;
+            if (last && last.url === url && (now - last.ts) < COOLDOWN_MS) {
+              deadSince = 0; // already retried recently; stop
+              return;
+            }
+            localStorage.setItem(LS_KEY, JSON.stringify({ url: url, ts: now }));
+          } catch (e) { /* ignore */ }
+          try { console.warn('[dead-video-retry] reloading: video 0x0/readyState=0 for ' + (Date.now() - deadSince) + 'ms'); } catch (e) { /* ignore */ }
+          location.reload();
+        }
+      } else {
+        deadSince = 0;
+      }
+    }, 2000);
+  }
+
   // Player controls auto-hide in full screen. The player's own CSS only hides them on pointer
   // idle; a TV remote is not a pointer, so on sites like CineJoy the controls (and the big
   // centre play/pause button) stay up forever. While the video is full screen we dispatch a
@@ -1267,12 +1329,50 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Flixer: suppress the player's auto-fullscreen. The flixer watch page calls
+  // requestFullscreen() on the player container when playback starts, which triggers
+  // native fullscreen. The video should stay inline until the user clicks the player
+  // or the menu button. So we block requestFullscreen() calls that happen within a
+  // short window after page load / each play event (the auto calls), and allow later
+  // calls (user-initiated).
+  //
+  // Minimal by design: one capture-phase 'play' listener + one prototype modification.
+  // No timers, no continuous polling — to avoid the PowerVR GPU crash that heavier
+  // instrumentation triggers on flixer.
+  if (__isFlixer) {
+    (function installFlixerFsGuard() {
+      if (window.__fbFlixerFsGuard) return;
+      window.__fbFlixerFsGuard = true;
+      var WINDOW_MS = 5000;
+      var suppressUntil = Date.now() + WINDOW_MS;
+      document.addEventListener('play', function () {
+        suppressUntil = Date.now() + WINDOW_MS;
+      }, true);
+      var proto = window.Element.prototype;
+      var names = ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
+      for (var i = 0; i < names.length; i++) {
+        var n = names[i];
+        if (typeof proto[n] !== 'function') continue;
+        var orig = proto[n];
+        proto[n] = function () {
+          if (Date.now() < suppressUntil) {
+            return Promise.reject(new Error('auto fullscreen suppressed'));
+          }
+          return orig.apply(this, arguments);
+        };
+      }
+    })();
+  }
+
   // Flixer: stop here. The passive __fb API above is available for explicit Android-driven
   // commands (video controls, typing). Everything below installs continuous capture-phase
   // event listeners, media health timers, HLS constructor hooks, and synthetic click
   // forwarding — all of which add GPU/CPU load that triggers the PowerVR driver crash
   // during flixer's intro animation.
   if (__isFlixer) return;
+
+  // Dead-video auto-retry: reload once if the player's video never loads (flaky CDN).
+  installDeadVideoRetry();
 
   // Auto-hide the player's controls in full screen (CineJoy and similar): synthetic pointer
   // activity on the video, driven by the player's own idle logic. Not installed on flixer.
@@ -1608,7 +1708,52 @@
   }
 
   // Probe network requests to understand what the MSE player downloads.
-  // Logs segment URLs (m3u8, m4s, ts, mp4) to help identify quality variants.
+  // COALESCED per host: a segment-heavy site (HLS/DASH) can emit thousands of
+  // per-request events in one session, which pushes other evidence out of the
+  // 2 MiB diagnostic rotation. Instead of one event per segment, aggregate per
+  // host over a 10 s window and emit a single summary (count + first/last URL +
+  // method counts). Diagnostics-only; never affects page behavior.
+  var __netAgg = {};
+  var __netAggCap = 128;
+  function netAggRecord(u, method) {
+    if (!diagnosticEnabled) return;
+    try {
+      var host = 'unknown';
+      try { host = new URL(u, location.href).host; } catch (e2) { host = 'unknown'; }
+      var now = Date.now();
+      try { if (typeof performance !== 'undefined' && performance.now) now = performance.now(); } catch (e3) {}
+      var e = __netAgg[host];
+      if (!e) {
+        var n = 0; for (var k in __netAgg) { if (__netAgg.hasOwnProperty(k)) n++; }
+        if (n >= __netAggCap) { netAggFlush(); }
+        e = __netAgg[host] = { count: 0, first: u.substring(0, 200), last: u.substring(0, 200), t0: now, t1: now, methods: {} };
+      }
+      e.count++;
+      e.last = u.substring(0, 200);
+      e.t1 = now;
+      var m = method || 'GET';
+      e.methods[m] = (e.methods[m] || 0) + 1;
+    } catch (e) { /* ignore */ }
+  }
+  function netAggFlush() {
+    try {
+      for (var host in __netAgg) {
+        if (!__netAgg.hasOwnProperty(host)) continue;
+        var e = __netAgg[host];
+        if (e && e.count > 0) {
+          diagnostic('net_segment_summary', {
+            host: host,
+            count: e.count,
+            first: e.first,
+            last: e.last,
+            windowMs: Math.round(e.t1 - e.t0),
+            methods: e.methods
+          });
+        }
+        delete __netAgg[host];
+      }
+    } catch (e) { /* ignore */ }
+  }
   var __netProbeInstalled = false;
   function installNetworkProbe() {
     if (__netProbeInstalled) return;
@@ -1618,7 +1763,7 @@
       try {
         var u = String(url);
         if (/\.(m3u8|m4s|ts|mp4|mpd)(\?|$)/i.test(u) || /segment|chunk|part/i.test(u)) {
-          diagnostic('net_segment', { url: u.substring(0, 200), method: (opts && opts.method) || 'GET' });
+          netAggRecord(u, (opts && opts.method) || 'GET');
         }
       } catch (e) { /* ignore */ }
       return origFetch.apply(this, arguments);
@@ -1628,11 +1773,12 @@
       try {
         var u = String(url);
         if (/\.(m3u8|m4s|ts|mp4|mpd)(\?|$)/i.test(u) || /segment|chunk|part/i.test(u)) {
-          diagnostic('net_segment', { url: u.substring(0, 200), method: method });
+          netAggRecord(u, method);
         }
       } catch (e) { /* ignore */ }
       return origOpen.apply(this, arguments);
     };
+    try { setInterval(netAggFlush, 10000); } catch (e) { /* ignore */ }
   }
 
   function diagnostic(event, data) {

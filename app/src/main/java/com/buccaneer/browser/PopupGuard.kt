@@ -67,6 +67,21 @@ class PopupGuard(context: Context) {
         prefs.edit().putStringSet(KEY_PROTECTED, set).apply()
     }
 
+    /**
+     * Ensure a host is protected: add it to the user list if it is not already covered.
+     * Never removes. Called when a site is bookmarked, so every bookmarked site gets
+     * redirect protection without the user having to toggle it by hand.
+     */
+    fun protect(host: String) {
+        val h = cleanHost(host)
+        if (h.isEmpty() || isBuiltIn(h)) return
+        val set = userDomains()
+        if (set.none { hostMatches(h, it) }) {
+            set.add(h)
+            prefs.edit().putStringSet(KEY_PROTECTED, set).apply()
+        }
+    }
+
     // ---------------------------------------------------------------- the rules.json rule
 
     /**
@@ -104,8 +119,22 @@ class PopupGuard(context: Context) {
          * The domain hard-coded in the extension's rules.json (initiatorDomains / excludedRequestDomains)
          * and content.js. To protect more sites permanently, add them here, or use the menu item
          * "Block redirects from <site>" while visiting the site.
+         *
+         * Streaming sites are protected by default: their ad scripts redirect the MAIN FRAME to an
+         * off-site ad domain (e.g. flixer.gd -> ravishwalnut.qpon -> strategiboost.com). The popup
+         * guard blocks popup windows but not main-frame redirects, so these sites need the
+         * redirect-block. Same-site navigations and sub-resource loads (video, iframes) are never
+         * affected — only off-site main-frame navigations are blocked.
          */
-        val DEFAULT_PROTECTED: List<String> = listOf("7movies.ac")
+        val DEFAULT_PROTECTED: List<String> = listOf(
+            "7movies.ac",
+            "flixer.gd",
+            "cinejoy.pk",
+            "novahd.cc",
+            "movy.sx",
+            "toflix.co",
+            "pantyflix.com"
+        )
 
         fun hostMatches(host: String, domain: String): Boolean =
             host == domain || host.endsWith(".$domain")

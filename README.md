@@ -1,6 +1,22 @@
-# Buccaneer 2.3.1
+# Buccaneer 2.3.2
 
 A lightweight web browser for Android TV, designed for remote control navigation and streaming content.
+
+## What's new in 2.3.2
+
+- **Video stays smooth after long sessions** — residual GPU state from video playback is now cleared when you leave a page, fixing the frame drops and video skipping that built up over a long streaming session.
+- **Ad redirects blocked** — a new anchor-based guard catches server-side ad redirects (301/302) that the old guard missed and returns you to the page you were on.
+- **Flixer poster grid is navigable** — the floating preview no longer pops up when you focus a poster with the D-pad; press OK to open the movie.
+
+Also in 2.3.2: flixer no longer forces fullscreen when playback starts; dead videos (CDN failures) auto-retry once before giving up; fixed blank posters on Nippleflix.
+
+## What's new in 2.3.1
+
+- **Popup guard** — now blocks high-z injected ad overlays, floating ad popups, and full-viewport catchers; exempts the main player iframe so it doesn't break video UI.
+- **Fullscreen** — replaced native fullscreen with page-level (CSS) fullscreen; video auto-resumes if entering fullscreen pauses it; FF/rewind and play/pause fixed for cross-origin players.
+- **TMDB image virtualization** — off-screen posters are virtualized to reduce GPU load and prevent crashes on poster-heavy sites (flixer, cinejoy).
+- **Search** — Enter/GO always submits the search form, not just when the page lets the key through.
+- **Menu** — removed "Show playback controls" and "Popup Guard" from the main menu; the Popup Guard toggle moved to Settings.
 
 ## Features
 
@@ -89,7 +105,7 @@ Or sideload the APK to your device.
 
 The main menu (Menu button) provides:
 
-1. **Scroll submenu** — Navigates within submenu
+1. **Scroll submenu/page with D-pad** — D-pad scrolls under the pointer; Back returns to pointer mode
 2. **Start page** — Return to the bookmark start page
 3. **Reload** — Reload the current page
 4. **Add bookmark** — Save the current page (shows "Remove bookmark" if already saved)
@@ -97,12 +113,10 @@ The main menu (Menu button) provides:
 6. **Address / search** — Open a search/address field
 7. **Full-screen video** — Toggle fullscreen video
 8. **Fit open submenus to screen** — Adjust recognized dropdown menus
-9. **Show playback controls** — Toggle playback controls
-10. **Popup Guard: ON/OFF** — Toggle popup blocking (shows blocked count)
-11. **Block redirects from [site]: ON/OFF** — Toggle redirect blocking for current site
-12. **Back** — Go back in history
-13. **Settings...** — Open settings
-14. **Exit browser** — Close the app
+9. **Block redirects from [site]: ON/OFF** — Toggle redirect blocking for current site
+10. **Back** — Go back in history
+11. **Settings...** — Open settings
+12. **Exit browser** — Close the app
 
 ### Settings
 
@@ -112,6 +126,7 @@ The main menu (Menu button) provides:
 - **Prefer low quality streams** — Prefer 480p/720p over 1080p (default ON)
 - **One video at a time** — Pause other videos when one starts
 - **Software rendering** — Use software rendering (workaround for GPU issues)
+- **Popup Guard** — Toggle popup blocking (shows blocked count)
 - **Diagnostics** — Enable/disable diagnostic logging
 
 ### Bookmarks

@@ -1,26 +1,26 @@
 [
-  {
-    "path": "app/src/main/assets/flixer_image_guard.js",
-    "sha256": "5afdf0b72a3c21cdbad3a99640dd0bb683642163408f199ef1ff5622181d4061"
-  },
-  {
-    "path": "app/src/main/assets/popup_guard.js",
-    "sha256": "da16a8cb3043db6e7d05acf44ff5695d9082336bf68d8dea1a8349db6a093343"
-  },
-  {
-    "path": "app/src/main/assets/page_helpers.js",
-    "sha256": "a96b90508f4c41769cb24e86ef5b7f5c695eb6a700f57d59b3f0a1784b95fdc1"
-  },
-  {
-    "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
-    "after": "    private fun applyDarkMode()",
-    "before": "    private fun toggleDark()",
-    "sha256": "1f1b2c3d186b636281cedd55b7f69d606ebfa21e543944445e6e836a0231af90"
-  },
-  {
-    "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
-    "after": "            // Detect guarded poster-grid page:",
-    "before": "        @TargetApi(Build.VERSION_CODES.M)",
-    "sha256": "cc366f65fe5046dfa66377eca18c3fe1cdc9ce7942fde9d90f50d0d7d68bf8af"
-  }
+ {
+  "path": "app/src/main/assets/flixer_image_guard.js",
+  "sha256": "d1080fae27139e2eab2c2ef93d227140e9c694aed2d117a2a4dab483133a43e4"
+ },
+ {
+  "path": "app/src/main/assets/popup_guard.js",
+  "sha256": "512daf8b7f7ab84da482a2f941db72534ab458968ac834cf1f15698497455eb3"
+ },
+ {
+  "path": "app/src/main/assets/page_helpers.js",
+  "sha256": "cc79a3a97de1f0dc80899b3f6dbd9852a6d1ac8f795703a082316fb7642b03d2"
+ },
+ {
+  "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
+  "after": "    private fun applyDarkMode()",
+  "before": "    private fun toggleDark()",
+  "sha256": "1f1b2c3d186b636281cedd55b7f69d606ebfa21e543944445e6e836a0231af90"
+ },
+ {
+  "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
+  "after": "            // Detect guarded poster-grid page:",
+  "before": "        @TargetApi(Build.VERSION_CODES.M)",
+  "sha256": "e99661f1672613317ea1d2880f2175f16ac3c0ceb9f6b667976593b32f55dadf"
+ }
 ]
