@@ -12,7 +12,7 @@ subsystem over its threshold even when the fix itself is locally correct.
 - **GPU:** `adds` / `removes` / `neutral` on the shared PowerVR budget. This is the field
   that predicts the next failure.
 - **Status:** `verified` (confirmed on device) · `armed` (installed, not yet exercised by a
-  real failure) · `reverted` (shipped then pulled) · `leave-it` (user decision not to fix).
+  real failure) · `reverted` (shipped then pulled) · `leave-it` (decision not to fix).
 
 > **Rule:** before shipping any fix, ask "does this add a GPU operation?" If yes and the
 > problem it solves is not GPU-related, it is suspect (FAILURE_LOOP lesson #2).
@@ -32,7 +32,7 @@ Not yet committed. This is the current state of the device build.
   — YouTube is bot-blocking the instances' server IPs for new fetches. The one
   earlier success (rickroll) was served from instance cache. 13/15 official
   instances remain dead/CORS-blocked. Whack-a-mole against YouTube's
-  infrastructure; not fixable in the app. User decision 2026-10-22: abandon.
+  infrastructure; not fixable in the app. Decision 2026-10-22: abandon.
 - **Broke / risked:** none — no code shipped.
 - **GPU:** neutral (no change).
 - **Status:** `abandoned`. Full evidence: `docs/YOUTUBE_ADS.md` §8. Remaining
@@ -51,7 +51,7 @@ Not yet committed. This is the current state of the device build.
   subsystem. The reset runs after media teardown, before the next page loads.
 - **GPU:** **removes** (clears residual state before the next composite).
 - **Status:** `verified` — `test1_diag` showed 7 `video_render_reset`, frame drops 0–3.5%,
-  no buildup. User: "skipping is gone" (monitoring for a full long-day session).
+  no buildup (monitoring for a full long-day session).
 - **File:** `MainActivity.kt` (`videoActive` field ~L398; set ~L1483; reset ~L1678).
 
 ### Flixer fullscreen gravity fix
@@ -63,10 +63,10 @@ Not yet committed. This is the current state of the device build.
   "child already has a parent" on renderer-recovery paths.
 - **Broke / risked:** none observed. Remaining top-alignment on *some* flixer pages is a
   page-layout quirk (the video is top-aligned *inside* the page/WebView, which gravity
-  cannot reach) — **not** fixed, by user decision.
+  cannot reach) — **not** fixed, by decision.
 - **GPU:** **neutral** (one-time layout change; no new continuous GPU ops).
 - **Status:** `verified` for the gravity case; the residual page-layout offset is
-  `leave-it` (user: "leave it" — a CSS/JS reposition carries the same regression risk that
+  `leave-it` (a CSS/JS reposition carries the same regression risk that
   broke auto-hide).
 - **File:** `MainActivity.kt` `enterFullscreen` (~L2666).
 
@@ -273,5 +273,5 @@ Not yet committed. This is the current state of the device build.
 
 ## Older releases
 
-See `docs/history/` for 1.3 → 1.9.9 change and validation notes. 2.2/2.3/2.3.1 release
-notes are in git history (`git log --oneline`).
+Earlier 1.x releases (1.3 → 1.9.9) are no longer documented in this repository.
+2.2/2.3/2.3.1 release notes are in git history (`git log --oneline`).

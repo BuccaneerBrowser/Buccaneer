@@ -6,7 +6,7 @@
  *
  *   1. HOVER-PREVIEW: auto-revealed when a poster gains focus (DPAD on a TV).
  *      This covers the poster and intercepts focus, making the grid hard to
- *      navigate. NOT wanted (user: "should be open on click, not mouseover").
+ *      navigate. NOT wanted (should be open on click, not mouseover).
  *
  *   2. DETAIL MODAL: revealed when a poster is CLICKED. Shows the enlarged
  *      poster + metadata + a "Play" button that navigates to the watch page.

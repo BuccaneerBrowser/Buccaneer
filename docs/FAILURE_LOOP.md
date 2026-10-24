@@ -105,8 +105,7 @@ navigation) before the next site's video composites.
 
 **Why it is safe:** it *removes* load rather than adding it, so it cannot tip another
 subsystem. It runs after media teardown, before the next page loads. Verified: 7
-`video_render_reset` in `test1_diag`, frame drops 0–3.5%, no buildup. User: "skipping is
-gone."
+`video_render_reset` in `test1_diag`, frame drops 0–3.5%, no buildup.
 
 **Rule:** when the failure is accumulation, the fix is to *clear* the accumulation at a
 boundary — not to add more work.
@@ -133,7 +132,7 @@ boundary — not to add more work.
   confirm a `[dead-video-retry] reloading:` line appears and the video then plays.
 - **Flixer fullscreen centering:** the `Gravity.CENTER` fix is kept; the residual
   top-alignment on some flixer pages is a page-layout quirk (video top-aligned *inside* the
-  page/WebView, which gravity cannot reach). **Leave-it** by user decision — a CSS/JS
+  page/WebView, which gravity cannot reach). **Leave-it** — a CSS/JS
   reposition carries the same regression risk that broke auto-hide.
 - **GPU budget:** what is the actual budget on this device? (We have symptoms, not a
   number.) Does the residual-state threshold drift with temperature / memory pressure over

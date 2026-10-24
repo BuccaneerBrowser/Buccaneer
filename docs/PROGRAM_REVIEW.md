@@ -613,7 +613,7 @@ Method: every concrete claim in the current docs was re-verified against the liv
 | `TESTING.md` | Current (added `480f62e`) | High. The interdependency map + per-site regression checklist. One gap: missing the `viewport_catcher` reason (S9.3). |
 | `SECURITY.md` | Current | Short; keystore/secret handling. |
 | `RELEASE_2.3.1_NOTES.md`, `RELEASE_2.2_NOTES.md` | Release notes | Verified claims: YouTube auto-hide skip v, `allowfullscreen` on player iframes v, start page 2x5=10 tiles v, minSdk 22 / targetSdk 33 v (build.gradle.kts). |
-| `docs/history/*` (31 files) | Historical (1.3 -> 1.9.3 era) | **Reference only.** Do not use for current behavior; several describe designs that were later removed (e.g. the two-site CSS dark-mode injection, repair199 baseline). |
+
 | `HANDOFF.md` (root, 2.2 era) | Superseded by HANDOFF-full-program.md | Use only for history. |
 
 ## 6.2 Verified claims (spot-checked, all PASS)
@@ -665,7 +665,7 @@ Method: every concrete claim in the current docs was re-verified against the liv
 2. popup_guard.js line count 434 -> 538 (uncommitted delta, S9.3).
 3. `viewport_catcher` is a fourth `overlay_killed` reason not listed in TESTING.md/HANDOFF.
 4. README's "tap the on-screen seek bar" line is ambiguous: the *native* seek bar is display-only; the line refers to the player's in-page seek bar (or the OSD). Keep the distinction explicit in any rewrite.
-5. Historical docs (`docs/history/`) describe removed designs (CSS dark-mode injection, repair199 baseline, 1.9.x menu layout) -- treat as archaeology only.
+5. Historical designs (CSS dark-mode injection, repair199 baseline, 1.9.x menu layout) are no longer documented in this repository.
 
 ---
 
