@@ -144,6 +144,62 @@ Not yet committed. This is the current state of the device build.
 - **Status:** `verified`.
 - **File:** `MainActivity.kt` `isImageGuarded` (~L388).
 
+### StreamCorner popup guard — player-iframe exemption hardened
+- **Fix:** on StreamCorner the popup guard's `isHighZAd` kill rule hid the player iframe
+  (`display:none`) → black video with audio. The player-iframe exemption (largest
+  real-src iframe) failed because the chat iframe (910×678) beat the player (960×540) in
+  "largest iframe with a real src" selection. Hardened the player-iframe identification in
+  BOTH `killOverlays` and `killCatchers`: a player iframe must have an http(s) src AND fit
+  within the viewport (pVw/pVh). Preserves the player exemption in both scanners per the
+  blocker-redesign invariants; ad click-catchers (about:blank/srcdoc) are still caught.
+- **Broke / risked:** none observed. The exemption is now stricter (http(s) + viewport-fit),
+  so it can only spare a real player, never an ad.
+- **GPU:** **neutral** (JS DOM logic; no new GPU ops).
+- **Status:** `verified` (StreamCorner player survives the guard; 18:50 session,
+  `diagnostic_session.jsonl` 3645 lines).
+- **Files:** `popup_guard.js` (5 edits, whole-file SHA-256 re-pinned in
+  `tests/protected-fixes.json`).
+
+### Player pin — `position:fixed` + scroll handler (PowerVR compositor bug)
+- **Fix:** StreamCorner video was black in NORMAL mode (audio fine, video playing at
+  ~27fps/readyState 4 but not compositing). Root cause: a Fire TV / PowerVR compositor bug
+  — the GPU video layer inside a cross-origin player iframe only composites when the iframe
+  is `position:fixed`; with the site's default `position:absolute` it renders black.
+  `transform:translateZ(0)` / `will-change:transform` do NOT trigger compositing.
+  `pinPlayerFrame()` pins the player iframe (via `bigFrame()`) to `position:fixed` at its
+  current rect and installs a scroll handler that repositions it as the page scrolls (so it
+  still scrolls normally). `unpinPlayerFrame()` restores the original styles + removes the
+  handler. No-op while `cssFs.active` (CSS fullscreen owns the iframe then); top-frame only.
+  `installPlayerPin()` runs it on a periodic timer. Hooked: unpin in `cssFsEnter` (before
+  `cssFsSave`), pin in `cssFsExit` (after `cssFsRestore`).
+- **Broke / risked:** the pin changes the iframe's positioning model. Risk: a site that
+  relies on the iframe being in normal flow could see a layout shift. Mitigated by the
+  scroll handler (the iframe visually tracks its original position) and by the no-op while
+  in CSS fullscreen. No regression observed on StreamCorner.
+- **GPU:** **removes** (forces the video layer to actually composite; the layer was
+  previously being dropped, so this restores a composite that was missing rather than adding
+  a new one).
+- **Status:** `verified` (StreamCorner normal-mode player region 0.0% → 99.6% rendered;
+  scroll handler confirmed following a 1007px scroll and returning correctly).
+- **File:** `page_helpers.js` `pinPlayerFrame()` / `unpinPlayerFrame()` /
+  `installPlayerPin()` + hooks in `cssFsEnter`/`cssFsExit` (re-pinned in
+  `tests/protected-fixes.json`).
+
+### Fullscreen scroll guard — centering fix
+- **Fix:** StreamCorner fullscreen video was not centered (top half cut off). Root cause:
+  the GPU video layer in a cross-origin player iframe is positioned in the top frame's
+  DOCUMENT coordinates, so a top-frame scroll offset (e.g. scrollY=237) shifts the video
+  layer and cuts off the top. `cssFsInstallScrollGuard()` pins the top frame to (0,0) via
+  `window.scrollTo(0,0)` while CSS fullscreen is active and restores the prior scroll on
+  exit. Wired into `cssFsEnter()`/`cssFsExit()`.
+- **Broke / risked:** none observed. It only pins scroll during CSS fullscreen and restores
+  it on exit; no effect in normal mode.
+- **GPU:** **neutral** (scroll pin; no new GPU ops).
+- **Status:** `verified` (StreamCorner fullscreen content band 0–1079 = full screen;
+  vision-confirmed centered + full-bleed, no black bars).
+- **File:** `page_helpers.js` `cssFsInstallScrollGuard()` / `cssFsRemoveScrollGuard()` +
+  hooks in `cssFsEnter`/`cssFsExit` (re-pinned in `tests/protected-fixes.json`).
+
 ---
 
 ## 2.3.1 (committed, 2026-10-20 → 2026-10-22)

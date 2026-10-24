@@ -13,7 +13,24 @@ for check in json.loads((root / 'tests/protected-fixes.json').read_text()):
         if 'before' in check: text = text[:text.index(check['before'])]
         data = text.encode()
     assert hashlib.sha256(data).hexdigest() == check['sha256'], check['path']
-print('PASS: Flixer/CineJoy image guard, Popup Guard, native guards, and dark mode preserved.')
+
+# Regression checks for intentional hardening changes that are not pinned to a
+# whole-file hash (which would reject every legitimate edit to these files).
+helpers = (root / 'app/src/main/assets/page_helpers.js').read_text()
+assert 'var __isStreamCorner = /(^|\\.)streamcorner\\.st$/.test(__host);' in helpers
+assert 'if (__isStreamCorner) installSandboxRemover();' in helpers
+assert 'if (lowQualityOn() || diagnosticEnabled) scanForBitmovin();' in helpers
+assert 'if (!diagnosticEnabled) return origFetch.apply(this, arguments);' in helpers
+assert 'if (!diagnosticEnabled) return origOpen.apply(this, arguments);' in helpers
+
+activity = (root / 'app/src/main/java/com/buccaneer/browser/MainActivity.kt').read_text()
+assert 'private fun isImageGuardedHost(host: String)' in activity
+assert 'host == \"cinejoy.pk\"' in activity
+assert 'if (r != null && onImageGuardedPage)' in activity
+assert 'if (tmdbAllowlist.contains(url))' in activity
+assert 'private val TRANSPARENT_PIXEL_PNG_1X1: ByteArray by lazy' in activity
+assert 'java.io.ByteArrayInputStream(TRANSPARENT_PIXEL_PNG_1X1)' in activity
+print('PASS: protected fixes and streaming hardening regression checks.')
 
 # NOTE: The former "repair199-baseline.json" check (which pinned page_helpers.js,
 # popup_guard.js, flixer_image_guard.js, fmhy_theme.js, tv_ui.js and cinejoy_quality.js

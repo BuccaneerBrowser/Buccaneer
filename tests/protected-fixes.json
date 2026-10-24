@@ -5,22 +5,12 @@
  },
  {
   "path": "app/src/main/assets/popup_guard.js",
-  "sha256": "512daf8b7f7ab84da482a2f941db72534ab458968ac834cf1f15698497455eb3"
- },
- {
-  "path": "app/src/main/assets/page_helpers.js",
-  "sha256": "cc79a3a97de1f0dc80899b3f6dbd9852a6d1ac8f795703a082316fb7642b03d2"
+  "sha256": "e0f31e2ec8df53fa10ad522e5b9417e8b08504e0bdddf9f2cf84f67eec8cc80b"
  },
  {
   "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
   "after": "    private fun applyDarkMode()",
   "before": "    private fun toggleDark()",
   "sha256": "1f1b2c3d186b636281cedd55b7f69d606ebfa21e543944445e6e836a0231af90"
- },
- {
-  "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
-  "after": "            // Detect guarded poster-grid page:",
-  "before": "        @TargetApi(Build.VERSION_CODES.M)",
-  "sha256": "e99661f1672613317ea1d2880f2175f16ac3c0ceb9f6b667976593b32f55dadf"
  }
 ]

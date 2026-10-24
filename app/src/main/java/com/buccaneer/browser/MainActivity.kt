@@ -53,6 +53,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 
+// Reuse the same tiny transparent image for blocked TMDB requests. A new stream is
+// created per response, but the PNG bytes are decoded only once.
+private val TRANSPARENT_PIXEL_PNG_1X1: ByteArray by lazy {
+    android.util.Base64.decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=",
+        android.util.Base64.DEFAULT
+    )
+}
+
 /** evaluateJavascript() returns JSON text; turn a JSON string result into the plain string (null for null). */
 fun jsString(raw: String?): String? {
     if (raw == null || raw == "null" || raw.length > 1024 * 1024 || !JsonInputBudget.allows(raw)) return null
@@ -414,6 +423,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var tapUp: Runnable? = null
     private var selectPending = false
     private var selectLongFired = false
+    private var backPending = false
+    private var backLongFired = false
     private var hoverActive = false
     private var lastHoverAt = 0L
     private val hideCursorRunnable = object : Runnable {
@@ -663,6 +674,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         interactionSerial++
         foreground = false
         selectPending = false
+        backPending = false
+        backLongFired = false
         wakeKey = null
         swallowedUp.clear()
         cancelPlayerWork()
@@ -936,6 +949,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (textMode == TextMode.PAGE || cancelledWebPrompt) closeKeypad()
             lastTapAt = 0L
             selectPending = false
+            backPending = false
+            backLongFired = false
             inputFrame = ""
             inputFieldState = ""
             inputFieldId = ""
@@ -1080,13 +1095,10 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     if (tmdbAllowlist.contains(url)) {
                         return null // allow real image
                     }
-                    // Return 1x1 transparent PNG
-                    val pixel = android.graphics.Bitmap.createBitmap(1, 1, android.graphics.Bitmap.Config.ARGB_8888)
-                    pixel.eraseColor(android.graphics.Color.TRANSPARENT)
-                    val baos = java.io.ByteArrayOutputStream()
-                    pixel.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, baos)
-                    pixel.recycle()
-                    val resp = android.webkit.WebResourceResponse("image/png", "inline", java.io.ByteArrayInputStream(baos.toByteArray()))
+                    // Return the cached 1x1 transparent PNG; only the stream is per-request.
+                    val resp = android.webkit.WebResourceResponse(
+                        "image/png", "inline", java.io.ByteArrayInputStream(TRANSPARENT_PIXEL_PNG_1X1)
+                    )
                     DiagnosticLog.record(this@MainActivity, "tmdb_image_blocked", JSONObject().apply {
                         put("url", DiagnosticLog.safeUrl(url))
                     })
@@ -1781,6 +1793,16 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 selectPending = false
                 if (!selectLongFired) tapAtCursor()
             }
+            if (backPending && code == KeyEvent.KEYCODE_BACK) {
+                backPending = false
+                if (!backLongFired) {
+                    if (startPage.shown()) {
+                        if (!startPage.back()) confirmExit()
+                    } else {
+                        if (webView.canGoBack()) navigateHistory(-1) else showStartPage(false)
+                    }
+                }
+            }
             if (swallowedUp.remove(code)) return true
             return super.dispatchKeyEvent(event)
         }
@@ -1847,7 +1869,14 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private fun onStartKey(event: KeyEvent): Boolean {
         val rep = event.repeatCount
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
-            if (rep == 0 && !startPage.back()) confirmExit()
+            // Short press = go back / exit (done on key-up), long press = open the menu.
+            if (rep == 0) {
+                backPending = true
+                backLongFired = false
+            } else if (rep == 1 && backPending && !backLongFired) {
+                backLongFired = true
+                showMainMenu()
+            }
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_MENU) {
@@ -2002,10 +2031,13 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {
+                // Short press = go back (done on key-up), long press = open the menu.
                 if (rep == 0) {
-                    if (webView.canGoBack()) {
-                        navigateHistory(-1)
-                    } else showStartPage(false)
+                    backPending = true
+                    backLongFired = false
+                } else if (rep == 1 && backPending && !backLongFired) {
+                    backLongFired = true
+                    showMainMenu()
                 }
                 return true
             }
@@ -2267,7 +2299,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
 
     /** Every live DOWN terminates with UP or CANCEL; renderer loss clears without native calls. */
     private fun finishPendingTap(cancel: Boolean, deliver: Boolean = true) {
-        if (cancel) { selectPending = false; selectLongFired = false }
+        if (cancel) { selectPending = false; selectLongFired = false; backPending = false; backLongFired = false }
         val tap = pendingTap
         pendingTap = null
         tapUp?.let { handler.removeCallbacks(it) }

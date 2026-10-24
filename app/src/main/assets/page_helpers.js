@@ -22,6 +22,7 @@
   var __host = '';
   try { __host = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
   var __isFlixer = /(^|\.)flixer\.(gd|su)$/.test(__host);
+  var __isStreamCorner = /(^|\.)streamcorner\.st$/.test(__host);
 
   // NOTE: dark mode is handled by the WebView's native force-dark (FORCE_DARK_ON),
   // configured in MainActivity.applyDarkMode(). Do NOT inject CSS filters here —
@@ -373,7 +374,7 @@
   // Flixer keeps the native path: its document returns early below, so none of this is
   // installed there.
 
-  var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false };
+  var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false, savedScroll: null, scrollGuard: null };
   var __nativeFsFns = {};
 
   function cssFsSave(el) {
@@ -396,6 +397,36 @@
     try { parent.postMessage({ __fbFs: 1, on: on ? 1 : 0 }, '*'); } catch (e) { /* ignore */ }
   }
 
+  // The GPU video layer inside a cross-origin player iframe is positioned in the TOP
+  // frame's document coordinates, not viewport coordinates. If the top frame page is
+  // scrolled when CSS fullscreen is entered, the video renders shifted by the scroll
+  // amount (the position:fixed iframe stays put, but the video layer does not). So we
+  // pin the top frame to (0,0) while CSS fullscreen is active and restore the original
+  // scroll on exit. Only the top frame is affected; in a child frame this is a no-op.
+  function cssFsInstallScrollGuard() {
+    if (window !== window.top) return;
+    if (cssFs.scrollGuard) return;
+    cssFs.savedScroll = { x: window.scrollX || 0, y: window.scrollY || 0 };
+    cssFs.scrollGuard = function () {
+      if (cssFs.active && (window.scrollX !== 0 || window.scrollY !== 0)) window.scrollTo(0, 0);
+    };
+    window.addEventListener('scroll', cssFs.scrollGuard, true);
+    window.scrollTo(0, 0);
+  }
+
+  function cssFsRemoveScrollGuard() {
+    if (window !== window.top) return;
+    if (cssFs.scrollGuard) {
+      window.removeEventListener('scroll', cssFs.scrollGuard, true);
+      cssFs.scrollGuard = null;
+    }
+    if (cssFs.savedScroll) {
+      var s = cssFs.savedScroll;
+      cssFs.savedScroll = null;
+      try { window.scrollTo(s.x, s.y); } catch (e) { /* ignore */ }
+    }
+  }
+
   // The element to make CSS-fullscreen: a bare <video> becomes its player container,
   // so the site's own controls come along.
   function cssFsTarget(el) {
@@ -408,6 +439,7 @@
 
   function cssFsEnter(el) {
     if (!el || cssFs.active) return Promise.resolve();
+    unpinPlayerFrame(); // restore original positioning so cssFsSave captures it
     cssFs.saved = cssFsSave(el);
     var st = el.style;
     st.setProperty('position', 'fixed', 'important');
@@ -423,6 +455,7 @@
     if (el.tagName === 'VIDEO') st.setProperty('object-fit', 'contain', 'important');
     cssFs.el = el;
     cssFs.active = true;
+    cssFsInstallScrollGuard();
     try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
     if (window === window.top) cssFsNotifyApp(true); else cssFsPostParent(true);
     installFsResumeGuard(el);
@@ -464,12 +497,77 @@
     var el = cssFs.el;
     cssFs.active = false;
     cssFs.el = null;
+    cssFsRemoveScrollGuard();
     if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
     cssFs.wasPlaying = false;
     try { if (el) cssFsRestore(el, cssFs.saved); } catch (e) { /* ignore */ }
     cssFs.saved = null;
+    pinPlayerFrame(); // re-pin the player iframe now that CSS fullscreen is gone
     try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
     if (window === window.top) cssFsNotifyApp(false); else cssFsPostParent(false);
+  }
+
+  // ------------------------------------------------------------------ player frame pinning
+  //
+  // On the PowerVR GPU (Fire TV) the video layer inside a cross-origin player iframe is
+  // only composited when the iframe is position:fixed. In normal mode (position:absolute)
+  // the video renders black even though it is playing. So we pin the player iframe to
+  // position:fixed and add a scroll handler that repositions it as the page scrolls, so it
+  // still appears to scroll normally. Disabled while CSS fullscreen is active (the
+  // cssFsEnter logic owns the iframe then). Top frame only; a no-op in child frames.
+  var playerPin = { frame: null, docLeft: 0, docTop: 0, scrollHandler: null, timer: 0 };
+
+  function pinPlayerFrame() {
+    if (window !== window.top) return;
+    if (cssFs.active) return;
+    var f = bigFrame();
+    if (!f) return;
+    if (playerPin.frame === f && f.style.position === 'fixed') return;
+    if (playerPin.frame && playerPin.frame !== f) unpinPlayerFrame();
+    var r; try { r = f.getBoundingClientRect(); } catch (e) { return; }
+    if (r.width < 100 || r.height < 100) return;
+    playerPin.frame = f;
+    playerPin.docLeft = r.left + (window.scrollX || 0);
+    playerPin.docTop = r.top + (window.scrollY || 0);
+    var st = f.style;
+    st.setProperty('position', 'fixed', 'important');
+    st.setProperty('left', Math.round(r.left) + 'px', 'important');
+    st.setProperty('top', Math.round(r.top) + 'px', 'important');
+    st.setProperty('width', Math.round(r.width) + 'px', 'important');
+    st.setProperty('height', Math.round(r.height) + 'px', 'important');
+    if (!playerPin.scrollHandler) {
+      playerPin.scrollHandler = function () {
+        if (!playerPin.frame || cssFs.active) return;
+        playerPin.frame.style.setProperty('top', Math.round(playerPin.docTop - (window.scrollY || 0)) + 'px', 'important');
+        playerPin.frame.style.setProperty('left', Math.round(playerPin.docLeft - (window.scrollX || 0)) + 'px', 'important');
+      };
+      window.addEventListener('scroll', playerPin.scrollHandler, true);
+    }
+    playerPin.scrollHandler();
+  }
+
+  function unpinPlayerFrame() {
+    if (!playerPin.frame) return;
+    var f = playerPin.frame;
+    var st = f.style;
+    st.removeProperty('position');
+    st.removeProperty('left');
+    st.removeProperty('top');
+    st.removeProperty('width');
+    st.removeProperty('height');
+    if (playerPin.scrollHandler) {
+      window.removeEventListener('scroll', playerPin.scrollHandler, true);
+      playerPin.scrollHandler = null;
+    }
+    playerPin.frame = null;
+    playerPin.docLeft = 0;
+    playerPin.docTop = 0;
+  }
+
+  function installPlayerPin() {
+    if (window.__playerPinInstalled) return;
+    window.__playerPinInstalled = true;
+    playerPin.timer = setInterval(pinPlayerFrame, 1000);
   }
 
   // Dead-video auto-retry: if the player's video never loads (stays 0x0 / readyState=0
@@ -716,8 +814,18 @@
     focusTarget: function () { var t=pickTarget(); if(!t)return 'none'; try{(t.frame||t.video).focus();return t.frame?'frame':'ok';}catch(e){return 'none';} },
     setDiagnosticLogging: function (enabled) {
       diagnosticEnabled = !!enabled;
-      if (!__isFlixer && diagnosticEnabled && typeof scheduleHealthSample === 'function') scheduleHealthSample();
-      if (!__isFlixer && !diagnosticEnabled && typeof healthTimer !== 'undefined') { clearTimeout(healthTimer); healthTimer = 0; }
+      if (!__isFlixer && diagnosticEnabled) {
+        if (typeof installNetworkProbe === 'function') installNetworkProbe();
+        if (typeof scheduleHealthSample === 'function') scheduleHealthSample();
+      }
+      if (!__isFlixer && !diagnosticEnabled) {
+        if (typeof healthTimer !== 'undefined' && healthTimer) { clearTimeout(healthTimer); healthTimer = 0; }
+        if (typeof __netFlushTimer !== 'undefined' && __netFlushTimer) {
+          clearInterval(__netFlushTimer);
+          __netFlushTimer = 0;
+        }
+        if (typeof __netAgg !== 'undefined') __netAgg = {};
+      }
       return diagnosticEnabled ? 1 : 0;
     },
     togglePlay: function () {
@@ -1374,6 +1482,10 @@
   // Dead-video auto-retry: reload once if the player's video never loads (flaky CDN).
   installDeadVideoRetry();
 
+  // Pin the player iframe to position:fixed so the PowerVR GPU composites its video layer
+  // in normal mode (it only composites when the iframe is position:fixed).
+  installPlayerPin();
+
   // Auto-hide the player's controls in full screen (CineJoy and similar): synthetic pointer
   // activity on the video, driven by the player's own idle logic. Not installed on flixer.
   //
@@ -1464,7 +1576,7 @@
   // StreamCorner: remove sandbox attribute from player iframes BEFORE they load.
   // The player checks its security context and refuses to play if sandboxed.
   // We need to remove the sandbox attribute before the iframe navigates.
-  installSandboxRemover();
+  if (__isStreamCorner) installSandboxRemover();
 
   // StreamCorner: remove sandbox attribute from player iframes BEFORE they load.
   // The player checks its security context and refuses to play if sandboxed.
@@ -1570,6 +1682,7 @@
   // the PowerVR driver crash during flixer's intro animation.
   document.addEventListener('loadedmetadata', function () {
     if (!qualityScanTimer) scanForQualityPlayers();
+    if (diagnosticEnabled) {
     // Diagnostic: report what player instances are available in this frame
     diagnostic('player_scan', {
       url: window.location.href || '',
@@ -1594,10 +1707,11 @@
         return keys.slice(0, 10);
       })()
     });
-    // Start network request logging for MSE segment analysis
+    // Install diagnostics-only network hooks only when logging is enabled.
     installNetworkProbe();
+    }
     // Check for Bitmovin player instances
-    scanForBitmovin();
+    if (lowQualityOn() || diagnosticEnabled) scanForBitmovin();
   }, true);
 
   // Bitmovin player has a quality API: getAvailableQualities(), getQuality(), setQuality()
@@ -1715,6 +1829,7 @@
   // method counts). Diagnostics-only; never affects page behavior.
   var __netAgg = {};
   var __netAggCap = 128;
+  var __netFlushTimer = 0;
   function netAggRecord(u, method) {
     if (!diagnosticEnabled) return;
     try {
@@ -1756,10 +1871,11 @@
   }
   var __netProbeInstalled = false;
   function installNetworkProbe() {
-    if (__netProbeInstalled) return;
+    if (!__netProbeInstalled) {
     __netProbeInstalled = true;
     var origFetch = window.fetch;
     window.fetch = function(url, opts) {
+      if (!diagnosticEnabled) return origFetch.apply(this, arguments);
       try {
         var u = String(url);
         if (/\.(m3u8|m4s|ts|mp4|mpd)(\?|$)/i.test(u) || /segment|chunk|part/i.test(u)) {
@@ -1770,6 +1886,7 @@
     };
     var origOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url) {
+      if (!diagnosticEnabled) return origOpen.apply(this, arguments);
       try {
         var u = String(url);
         if (/\.(m3u8|m4s|ts|mp4|mpd)(\?|$)/i.test(u) || /segment|chunk|part/i.test(u)) {
@@ -1778,7 +1895,8 @@
       } catch (e) { /* ignore */ }
       return origOpen.apply(this, arguments);
     };
-    try { setInterval(netAggFlush, 10000); } catch (e) { /* ignore */ }
+    }
+    try { if (!__netFlushTimer) __netFlushTimer = setInterval(netAggFlush, 10000); } catch (e) { /* ignore */ }
   }
 
   function diagnostic(event, data) {

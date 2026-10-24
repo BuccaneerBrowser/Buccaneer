@@ -268,16 +268,21 @@
     }
     var viewportArea = (window.innerWidth || 0) * (window.innerHeight || 0);
 
-    // Identify the main player iframe: the largest iframe with a real (non-blank,
-    // non-srcdoc) src. Streaming sites put the player iframe at the max z-index
-    // (2147483647) + position:fixed when in fullscreen — the SAME z-index the ad
-    // injector uses. The video inside is cross-origin, so containsVideo/hasControls
-    // can't see it, and a naive high-z rule kills the player (black screen with
-    // audio, dead seek bridge — coreflix 2026-10-21). Exempt the main player so the
-    // high-z rule only ever hits injected ads. Ad click-catcher iframes use
-    // about:blank / srcdoc srcs (not a real content URL) and are not the largest,
-    // so they are still caught.
+    // Identify the main player iframe: the largest VISIBLE iframe that (a) loads
+    // a real http(s) document and (b) fits within the viewport. Streaming sites
+    // put the player iframe at the max z-index (2147483647) + position:fixed when
+    // in fullscreen — the SAME z-index the ad injector uses. The video inside is
+    // cross-origin, so containsVideo/hasControls can't see it, and a naive high-z
+    // rule kills the player (black screen with audio, dead seek bridge — coreflix
+    // 2026-10-21). Exempt the main player so the high-z rule only ever hits
+    // injected ads. Criterion (a): ad click-catcher iframes use about:blank /
+    // srcdoc / data: srcs, never http(s). Criterion (b): in-flow iframes (chat
+    // panels, embedded content) extend past the viewport edge and can be LARGER
+    // than the fullscreen player — StreamCorner's 910x678 chat iframe beat the
+    // 960x540 player for the exemption, so the high-z rule killed the player
+    // (black video, 2026-10-23).
     var playerIframe = null, playerArea = 0;
+    var pVw = window.innerWidth || 0, pVh = window.innerHeight || 0;
     var ifrList;
     try { ifrList = document.getElementsByTagName('iframe'); } catch (e) { ifrList = []; }
     for (var fi = 0; fi < ifrList.length; fi++) {
@@ -285,8 +290,15 @@
       var fs; try { fs = getComputedStyle(f); } catch (e) { continue; }
       if (fs.display === 'none' || fs.visibility === 'hidden') continue;
       var fsrc = (f.src || '').toLowerCase();
-      if (!fsrc || fsrc === 'about:blank' || fsrc.indexOf('srcdoc') === 0) continue;
+      // A real player iframe loads an http(s) document. Ad click-catcher
+      // iframes use about:blank / srcdoc / data: srcs — never http(s).
+      if (fsrc.indexOf('http://') !== 0 && fsrc.indexOf('https://') !== 0) continue;
       var fr; try { fr = f.getBoundingClientRect(); } catch (e) { continue; }
+      // A fullscreen player fills the viewport. In-flow iframes (chat panels,
+      // embedded content) extend past the viewport edge and can be LARGER than
+      // the fullscreen player — see the comment above the loop. Only apply the
+      // fit test when the viewport size is known.
+      if (pVw > 0 && pVh > 0 && (fr.top < -2 || fr.left < -2 || fr.bottom > pVh + 2 || fr.right > pVw + 2)) continue;
       var fa = fr.width * fr.height;
       if (fa > playerArea) { playerArea = fa; playerIframe = f; }
     }
@@ -432,8 +444,10 @@
     if (!enabled()) return;
     var viewportArea = (window.innerWidth || 0) * (window.innerHeight || 0);
     if (viewportArea <= 0) return;
-    // Main player iframe: the largest iframe with a real (non-blank, non-srcdoc) src.
+    // Main player iframe: the largest visible iframe that loads a real http(s)
+    // document AND fits within the viewport (same logic as killOverlays).
     var playerIframe = null, playerArea = 0;
+    var pVw = window.innerWidth || 0, pVh = window.innerHeight || 0;
     try {
       var ifrList = document.getElementsByTagName('iframe');
       for (var pi = 0; pi < ifrList.length; pi++) {
@@ -441,8 +455,10 @@
         var fs; try { fs = getComputedStyle(f); } catch (e) { continue; }
         if (fs.display === 'none' || fs.visibility === 'hidden') continue;
         var fsrc = (f.src || '').toLowerCase();
-        if (!fsrc || fsrc === 'about:blank' || fsrc.indexOf('srcdoc') === 0) continue;
+        // Same two criteria as killOverlays: http(s) src + fits viewport.
+        if (fsrc.indexOf('http://') !== 0 && fsrc.indexOf('https://') !== 0) continue;
         var fr; try { fr = f.getBoundingClientRect(); } catch (e) { continue; }
+        if (pVw > 0 && pVh > 0 && (fr.top < -2 || fr.left < -2 || fr.bottom > pVh + 2 || fr.right > pVw + 2)) continue;
         var fa = fr.width * fr.height;
         if (fa > playerArea) { playerArea = fa; playerIframe = f; }
       }
