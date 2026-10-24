@@ -305,7 +305,7 @@ Full item list (in order), with behavior:
 - True if WebView supports ALGORITHMIC_DARKENING or FORCE_DARK (try/catch → false).
 
 ### applyDarkMode() — 3562–3595
-- **Verified-working config (comment, do not change)**: FORCE_DARK_ON + strategy 2 (PREFER_WEB_THEME_OVER_USER_AGENT_DARKENING). This is the only config where flixer loads without crashing and coreflix buttons work; omitting setForceDarkStrategy (render-client default) breaks flixer. fmhy stays light (VitePress color-scheme) — do NOT inject CSS; every fmhy dark-mode attempt crashed flixer's PowerVR GPU.
+- **Verified-working config (comment, do not change)**: FORCE_DARK_ON + strategy 2 (PREFER_WEB_THEME_OVER_USER_AGENT_DARKENING). This is the only config where poster-grid site loads without crashing and video site buttons work; omitting setForceDarkStrategy (render-client default) breaks poster-grid site. SPA portal stays light (VitePress color-scheme) — do NOT inject CSS; every SPA portal dark-mode attempt crashed poster-grid site's PowerVR GPU.
 - FORCE_DARK supported → setForceDark(ON/OFF) + setForceDarkStrategy(strategy 2); **diag `dark_mode_applied`** {method:"force_dark_strategy_2", enabled}.
 - Else ALGORITHMIC_DARKENING → setAlgorithmicDarkeningAllowed; **diag `dark_mode_applied`** {method:"algorithmic_darkening", enabled}.
 - Else **diag `dark_mode_applied`** {method:"none_supported", enabled}.
@@ -332,7 +332,7 @@ Full item list (in order), with behavior:
 
 ### toggleSoftwareRendering() — 3631–3647
 - Flips `softwareRendering`; **diag `setting_software_rendering`** {enabled}; persists `prefs "softwareRendering"`.
-- **Safety interlock**: if turning OFF while on a flixer host (flixer.gd / *.flixer.gd / flixer.su / *.flixer.su, parsed from `lastPageUrl`, host lowercased, trailing dot stripped) → toast "Turning OFF on flixer will crash - navigate away first", reverts `softwareRendering=true` + pref, returns (no recreate).
+- **Safety interlock**: if turning OFF while on a poster-grid site host (flixer.gd / *.flixer.gd / flixer.su / *.flixer.su, parsed from `lastPageUrl`, host lowercased, trailing dot stripped) → toast "Turning OFF on poster-grid site will crash - navigate away first", reverts `softwareRendering=true` + pref, returns (no recreate).
 - Otherwise: if URL is http(s), saves `prefs "restoreAfterRecreateUrl" = url` (so onCreate restores after WebView recreation); toast "Software rendering ON/OFF - reloading"; `handler.post { recreate() }`.
 
 ## Settings menu (3650–3680)
@@ -486,7 +486,7 @@ for those topics; the line-ordered core of this part is 2700–3956 in chunks 1�
 - `eval("window.__fb ? __fb.$call : 'none'")` → callback guards foreground + intent + target identity.
 - **Exact return-value semantics** (jsString(raw)):
   - `"ok"` → page helper ran the command in the top frame. If `tapFrame`: `postForPage(350)` → guarded `retryIfPlayRefused()` (handles browsers that refuse play() until a real click).
-  - `"frame"` → the player is in a cross-origin frame; the frame's own helper already ran the command. Special case: `tapFrame && fallbackKey == KEYCODE_MEDIA_PLAY_PAUSE && onFlixerPage` → `tapPlayerFrame(mouse = true)` (Flixer's player frame is not scripted; a real tap starts/toggles it).
+  - `"frame"` → the player is in a cross-origin frame; the frame's own helper already ran the command. Special case: `tapFrame && fallbackKey == KEYCODE_MEDIA_PLAY_PAUSE && onFlixerPage` → `tapPlayerFrame(mouse = true)` (poster-grid site's player frame is not scripted; a real tap starts/toggles it).
   - `"none"` or null → no helper / no video: DPAD-style fallback `sendKeyToPage(fallbackKey)`.
   - `else` (any unexpected string) → same fallback `sendKeyToPage(fallbackKey)`.
   - **The DPAD fallback path fires when the page helper is absent, reports no video, or returns garbage** — i.e. it synthesizes the equivalent hardware key (SPACE for play/pause, M for mute) into the page.
@@ -545,17 +545,17 @@ for those topics; the line-ordered core of this part is 2700–3956 in chunks 1�
 - **First action**: `osd.seekFractionAt(cx, cy)` (Osd.kt:90 — hit-test against the OSD seek bar in root coordinates) → if it returns a fraction: `seekToFraction(it)`, `showCursor()`, return. This is how tapping the seek bar seeks.
 - Otherwise: records `lastTapAt`; captures interaction/editor/target; `current()` = foreground + serials + target + `textMode==NONE` + no menu/list/textPanel/startPage.
 - `eval(__fb.selectAt(x/w, y/h))` (on-demand element selection, top frame).
-- Flixer special path (`onFlixerPage && customView == null`): `eval(seekClickJs(x/w, y/h, 'probe'))` → if result in {"track","frame"} use a mouse tap (`sendTap(x, y, mouse=true)`) and `repairSeekClick(x, y, interaction)`; else a touch tap. Comment: mouse input only over a recognized timeline or inside an opaque player frame.
-- Non-Flixer: `sendTap(x, y)` (touch).
-- `showCursor()`; then on-demand field reads at 150 ms and 650 ms: `eval(__fb.field())` → `focusFromPage(state)` (covers Flixer without listeners/instrumentation).
+- poster-grid site special path (`onFlixerPage && customView == null`): `eval(seekClickJs(x/w, y/h, 'probe'))` → if result in {"track","frame"} use a mouse tap (`sendTap(x, y, mouse=true)`) and `repairSeekClick(x, y, interaction)`; else a touch tap. Comment: mouse input only over a recognized timeline or inside an opaque player frame.
+- Non-poster-grid site: `sendTap(x, y)` (touch).
+- `showCursor()`; then on-demand field reads at 150 ms and 650 ms: `eval(__fb.field())` → `focusFromPage(state)` (covers poster-grid site without listeners/instrumentation).
 - `handler.postDelayed({ hideIme() }, 300)`.
 
 ### repairSeekClick(x, y, interaction) — 2128–2136
-- Comment: "One-shot fallback for identifiable seek tracks only; no Flixer listeners/timers/DOM styling."
+- Comment: "One-shot fallback for identifiable seek tracks only; no poster-grid site listeners/timers/DOM styling."
 - Guards width/height > 0 and `seekClickJs` non-blank; `postForPage(120)`: if still onFlixerPage, no customView, interaction unchanged, no keypad/menu/list/textPanel → `eval(seekClickJs(x/w, y/h))` (re-issues the seek click in the track's frame).
 
 ### sendTap(x, y, mouse = false) — 2139–2178
-- Comment: "Trusted native input: touch by default, mouse only for Flixer pointer/player clicks."
+- Comment: "Trusted native input: touch by default, mouse only for poster-grid site pointer/player clicks."
 - Guards pageAvailable + foreground; captures `epoch = pageEpoch`, target.
 - **diag `tap_dispatched`** {x, y, w, h}.
 - If DiagnosticLog enabled: `eval(__fb.tapStack(x, y))` → **diag `tap_stack`** with the element stack JSON (best-effort; shows which element eats the click — for cross-origin players the top element is the <iframe>, which is itself the answer).
@@ -580,7 +580,7 @@ State: `cursor: CursorView` (110, constructed at 536 with `cursorSize`); `hoverA
 - Removes hideCursorRunnable; `cursor.visibility = GONE`; `liftPointerIfPlaying()`; `hoverActive = false`.
 
 ### liftPointerIfPlaying() — 2200–2215
-- Comment: the browser parks the simulated mouse at the last hover position and never tells the page it is gone, so pointer-aware players (Movy) see "pointer over the controls" forever and pin controls visible. Lifting only while video plays: while browsing, the parked pointer keeps hover menus open while the user reads them.
+- Comment: the browser parks the simulated mouse at the last hover position and never tells the page it is gone, so pointer-aware players (video site) see "pointer over the controls" forever and pin controls visible. Lifting only while video plays: while browsing, the parked pointer keeps hover menus open while the user reads them.
 - Guards: `hoverActive` true AND `playbackHeartbeatAt > 0` AND `now - playbackHeartbeatAt < 12_000` (heartbeat proves video is playing; 12 s window).
 - Sends `ACTION_HOVER_EXIT` (SOURCE_MOUSE) at (cx, cy) to webView via dispatchGenericMotionEvent; **diag `pointer_lifted`** {x, y}; exceptions swallowed ("hover is a nicety").
 

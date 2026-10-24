@@ -121,7 +121,7 @@ class PopupGuard(context: Context) {
          * "Block redirects from <site>" while visiting the site.
          *
          * Streaming sites are protected by default: their ad scripts redirect the MAIN FRAME to an
-         * off-site ad domain (e.g. flixer.gd -> ravishwalnut.qpon -> strategiboost.com). The popup
+         * off-site ad domain (e.g. the poster-grid site host -> ravishwalnut.qpon -> strategiboost.com). The popup
          * guard blocks popup windows but not main-frame redirects, so these sites need the
          * redirect-block. Same-site navigations and sub-resource loads (video, iframes) are never
          * affected — only off-site main-frame navigations are blocked.

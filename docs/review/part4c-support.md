@@ -170,7 +170,7 @@ BOM `\ufeff` (L23).
   `length <= 32768 && JsonInputBudget.allows(state)` before `JSONObject(data)`.
 - L1479 `Bridge.tmdbAllowlist(urls)`: `urls` accepted only if
   `length <= 131072 && JsonInputBudget.allows(list)` before `JSONArray(list)`
-  (Flixer image virtualization allowlist).
+  (poster-grid site image virtualization allowlist).
 
 ## What breaks if changed/removed
 - Removing the preflight: a malicious page could return a deeply nested JSON string
@@ -381,7 +381,7 @@ mapping table is in the KDoc at L10-23.
 - Changing DEFAULT_PROTECTED or hostMatches: isBuiltIn/toggleProtected menu
   behavior and the 7movies.ac protection change.
 - Removing `readAsset`: all six JS assets fail to load (L511-516) — popup guard JS,
-  page helpers, flixer image guard (the PowerVR crash fix), theme and TV UI scripts
+  page helpers, poster-grid site image guard (the PowerVR crash fix), theme and TV UI scripts
   all die.
 - Renaming prefs keys: existing users lose their guard state/protected list.
 

@@ -1,7 +1,7 @@
 /*
- * Flixer poster hover-preview guard.
+ * the poster-grid site poster hover-preview guard.
  *
- * Flixer's poster grids use a single floating card element (position:fixed,
+ * the poster-grid site's poster grids use a single floating card element (position:fixed,
  * z-index:50, bg-[#181818], contains an <img>) that serves TWO purposes:
  *
  *   1. HOVER-PREVIEW: auto-revealed when a poster gains focus (DPAD on a TV).
@@ -34,12 +34,12 @@
 (function () {
   'use strict';
 
-  // Only act on flixer hosts.
+  // Only act on the poster-grid site hosts.
   var __h = '';
   try { __h = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
   if (!/(^|\.)flixer\.(gd|su)$/.test(__h)) return;
 
-  // Idempotency: re-evaluated on every flixer page commit.
+  // Idempotency: re-evaluated on every poster-grid site page commit.
   if (window.__flixerPosterGuard) return;
   window.__flixerPosterGuard = true;
 

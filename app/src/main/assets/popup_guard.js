@@ -132,7 +132,7 @@
     } catch (e2) { /* ignore */ }
   }
   // Only install the pointer-event listener in the vidcore player frame.
-  // Installing it in every frame (including flixer's top frame) interferes with
+  // Installing it in every frame (including the poster-grid site's top frame) interferes with
   // page rendering and triggers GPU driver crashes on this Fire TV.
   var isVidcoreFrame = (window.location.hostname || '').indexOf('vidcore') >= 0;
   var deferredClickTimer = 0;
@@ -282,12 +282,12 @@
     // put the player iframe at the max z-index (2147483647) + position:fixed when
     // in fullscreen — the SAME z-index the ad injector uses. The video inside is
     // cross-origin, so containsVideo/hasControls can't see it, and a naive high-z
-    // rule kills the player (black screen with audio, dead seek bridge — coreflix
+    // rule kills the player (black screen with audio, dead seek bridge — a video site
     // 2026-10-21). Exempt the main player so the high-z rule only ever hits
     // injected ads. Criterion (a): ad click-catcher iframes use about:blank /
     // srcdoc / data: srcs, never http(s). Criterion (b): in-flow iframes (chat
     // panels, embedded content) extend past the viewport edge and can be LARGER
-    // than the fullscreen player — StreamCorner's 910x678 chat iframe beat the
+    // than the fullscreen player — the cross-origin player site's 910x678 chat iframe beat the
     // 960x540 player for the exemption, so the high-z rule killed the player
     // (black video, 2026-10-23).
     var playerIframe = null, playerArea = 0;
@@ -345,8 +345,8 @@
       //
       //     An earlier version also killed any floating element whose text matched
       //     ad copy ("free", "download", "offer", "sign up", ...). That matched
-      //     ordinary page text: movie synopses and page titles. On Movy and
-      //     CineJoy the hero content layer is position:absolute, carries the
+      //     ordinary page text: movie synopses and page titles. On a video site and
+      //     the lazy-load poster site the hero content layer is position:absolute, carries the
       //     Play button, and its synopsis contains words like "offer" or
       //     "download" — so the rule hid the Play button on show pages
       //     (2026-10-21, "Bad Apples" report). Text is not a reliable ad signal;
@@ -362,7 +362,7 @@
       //      pages) where covers_video can't fire because there is no <video>.
       //      The containsVideo / hasControls checks below still protect real
       //      player UI and modals, so this is safe to apply broadly.
-      //      (2026-10-21, coreflix "baseball" popups: z=2147483646 fixed DIVs
+      //      (2026-10-21, a video site "baseball" popups: z=2147483646 fixed DIVs
       //      with an injected <style> block, no controls, no video — slipped
       //      through both isIframeAd and covers_video.)
       // Exempt the main player and its container chain: an injected ad is never
@@ -374,7 +374,7 @@
       // viewport at a high z-index, on a page where covers_video can't fire (no <video>
       // yet — home, show/season, pre-roll) and the z-index is below the 1,000,000
       // high-z threshold. Ad injectors commonly use 9999 / 1000 for these (seen on
-      // coreflix/nippleflix and movy, 2026-10-22). Legitimate full-viewport UI (modals,
+      // a video site/a poster site and a video site, 2026-10-22). Legitimate full-viewport UI (modals,
       // the player container) contains controls or a video, so the containsVideo /
       // hasControls protections below still spare it; the player and its container
       // chain are exempt via isPlayerChain.
@@ -444,10 +444,10 @@
     }
   }
 
-  // Minimal popup scan for flixer. The full-DOM walk in killOverlays
+  // Minimal popup scan for the poster-grid site. The full-DOM walk in killOverlays
   // (querySelectorAll over every div/span/a/iframe) triggers the PowerVR driver
-  // crash during flixer's intro animation, so the heavy scanner stays OFF on
-  // flixer. But flixer still gets inline ad click-catchers that the window.open
+  // crash during the poster-grid site's intro animation, so the heavy scanner stays OFF on
+  // the poster-grid site. But the poster-grid site still gets inline ad click-catchers that the window.open
   // guard cannot catch. This checks only a handful of elements (body's direct
   // children + iframes) and applies only the cheap high-z and full-viewport
   // rules. It is CPU-cheap and does not add the DOM-walk load that crashed the
@@ -481,7 +481,7 @@
     // of <body>), which body.children alone misses. <head>/<body> themselves are not
     // position:fixed/absolute, so the floating check below filters them out before any
     // heavy work — this stays far under the DOM-walk load that crashed the PowerVR
-    // driver, which is why flixer uses this minimal scanner at all.
+    // driver, which is why the poster-grid site uses this minimal scanner at all.
     var els = [];
     try {
       var html = document.documentElement;
@@ -504,7 +504,7 @@
       var hasZ = !isNaN(z);
       var area = r.width * r.height;
       // Reconnaissance: log floating high-z elements (killed or not), once each,
-      // so we can see exactly what flixer's popups are from the session log.
+      // so we can see exactly what the poster-grid site's popups are from the session log.
       if (hasZ && z >= 100 && area >= 1000 && !el.getAttribute('data-fslogged')) {
         try { el.setAttribute('data-fslogged', '1'); } catch (e) { }
         diagnostic('floating_seen', {
@@ -523,7 +523,7 @@
       // Abnormally high z-index (>= 1,000,000): an injected ad overlay DIV. Ad
       // injectors force their creative to the top with the 32-bit max z-index
       // (2147483646); legitimate page UI never reaches 1,000,000. Mirrors the
-      // isHighZAd rule in killOverlays() so flixer's minimal scanner catches the
+      // isHighZAd rule in killOverlays() so the poster-grid site's minimal scanner catches the
       // same overlays. The player + container chain are exempt below, and the
       // video/controls protections still apply.
       var isHighZAd = z >= 1000000 && area >= 1000;
@@ -550,9 +550,9 @@
 
   // Scanning every element every 1500 ms is heavy on big pages. Only re-check after the DOM
   // changes (debounced), with a slow interval as a fallback for style-only changes.
-  // Flixer: the full-DOM walk (MutationObserver + interval over every element)
-  // triggers the PowerVR driver crash during flixer's intro animation, so the
-  // heavy scanner stays OFF. But flixer still gets inline ad click-catchers that
+  // the poster-grid site: the full-DOM walk (MutationObserver + interval over every element)
+  // triggers the PowerVR driver crash during the poster-grid site's intro animation, so the
+  // heavy scanner stays OFF. But the poster-grid site still gets inline ad click-catchers that
   // the window.open guard cannot catch, so run the MINIMAL killCatchers scan
   // instead: a handful of elements (body's children + iframes), cheap rules only,
   // slow interval, no MutationObserver.

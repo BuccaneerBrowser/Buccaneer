@@ -139,7 +139,7 @@ class Regression171Test {
         assertTrue("Events="+events.map{ "${it.source}/${it.getToolType(0)}" }+" scripts="+ScriptWebView.scripts.map{it.takeLast(100)},events.all{it.source==InputDevice.SOURCE_MOUSE && it.getToolType(0)==MotionEvent.TOOL_TYPE_MOUSE})
         assertEquals(MotionEvent.BUTTON_PRIMARY,events.first().buttonState);assertEquals(0,events.last().buttonState)
         events.forEach{it.recycle()};events.clear()
-        ScriptWebView.seekResult="none" // A working Flixer button retains touch, not mouse.
+        ScriptWebView.seekResult="none" // A working poster-grid site button retains touch, not mouse.
         key(a,KeyEvent.KEYCODE_DPAD_CENTER)
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(80))
         assertEquals(2,events.size);assertTrue(events.all{it.source==InputDevice.SOURCE_TOUCHSCREEN})

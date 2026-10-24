@@ -14,11 +14,11 @@
   if (window.__fbInstalled) return;
   window.__fbInstalled = true;
 
-  // Flixer: skip all instrumentation. The PowerVR GPU driver on this Fire TV crashes
+  // the poster-grid site: skip all instrumentation. The PowerVR GPU driver on this Fire TV crashes
   // (SIGSEGV in KEGLReleaseRenderTarget) when our DOM observers, HLS hooks, and event
-  // listeners run alongside flixer's intro animation. The passive __fb API is still
+  // listeners run alongside the poster-grid site's intro animation. The passive __fb API is still
   // exposed (video controls, typing) but no continuous capture, timers, or synthetic
-  // clicks are installed on flixer-owned documents.
+  // clicks are installed on the poster-grid site-owned documents.
   var __host = '';
   try { __host = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
   var __isFlixer = /(^|\.)flixer\.(gd|su)$/.test(__host);
@@ -27,7 +27,7 @@
   // NOTE: dark mode is handled by the WebView's native force-dark (FORCE_DARK_ON),
   // configured in MainActivity.applyDarkMode(). Do NOT inject CSS filters here —
   // filter:invert() on <html> crashes the PowerVR GPU process on the Fire TV
-  // (SIGSEGV in libGLESv2_POWERVR_ROGUE.so), which took down flixer.gd.
+  // (SIGSEGV in libGLESv2_POWERVR_ROGUE.so), which took down the poster-grid site host.
 
   var MIN_SIDE = 100;
 
@@ -130,7 +130,7 @@
   // What should the remote control? A video that is playing right here wins. Otherwise a big frame
   // from another site (a typical embedded player) beats a small video (an ad or a banner).
   // Returns {video: el}, {frame: el} or null.
-  // Passive selected-player identity. No new Flixer listeners or timers.
+  // Passive selected-player identity. No new the poster-grid site listeners or timers.
   var selectedTarget = null;
   function attachedTarget(el) {
     try {
@@ -274,7 +274,7 @@
       return;
     }
     if (m.__fbFs === 1 || m.__fbFsCmd === 1) {
-      if (__isFlixer) return; // Flixer keeps the native fullscreen path.
+      if (__isFlixer) return; // the poster-grid site keeps the native fullscreen path.
       if (m.__fbFs === 1) {
         // A child frame entered/exited CSS fullscreen: fill/restore its iframe element.
         var fr = null;
@@ -339,7 +339,7 @@
       try { return runOnVideo(t.video, cmd, arg); } catch (e) { return 'failed'; }
     }
     if (t.frame) {
-      // Flixer keeps the app's trusted-tap path: its player must be started by a real touch.
+      // the poster-grid site keeps the app's trusted-tap path: its player must be started by a real touch.
       if (!frameIsFlixer(t.frame) && forwardToFrame(t.frame, cmd, arg)) return 'frame';
     }
     return 'frame';
@@ -371,7 +371,7 @@
   // so we fake both: while active, fullscreenElement reports our element, and we dispatch
   // a synthetic fullscreenchange on enter/exit.
   //
-  // Flixer keeps the native path: its document returns early below, so none of this is
+  // the poster-grid site keeps the native path: its document returns early below, so none of this is
   // installed there.
 
   var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false, savedScroll: null, scrollGuard: null };
@@ -633,13 +633,13 @@
   }
 
   // Player controls auto-hide in full screen. The player's own CSS only hides them on pointer
-  // idle; a TV remote is not a pointer, so on sites like CineJoy the controls (and the big
+  // idle; a TV remote is not a pointer, so on sites like the lazy-load poster site, the controls (and the big
   // centre play/pause button) stay up forever. While the video is full screen we dispatch a
   // synthetic mousemove on the video every 1.5 s — the same pointer activity a mouse would
   // produce, which makes the player's own idle logic hide the controls. No CSS, no class
   // changes, no site styling: we only feed the player the activity it already expects.
   // The pause button is a child of the control bar, so it hides with the bar.
-  // Gated behind the flixer guard below: flixer's player must not get synthetic input.
+  // Gated behind the poster-grid site guard below: the poster-grid site's player must not get synthetic input.
   function installControlsAutoHide() {
     if (window.__fbAutoHideInstalled) return;
     window.__fbAutoHideInstalled = true;
@@ -680,7 +680,7 @@
     function schedule() {
       if (timer) return;
       // A few pokes are enough to start the idle timer on players whose controls
-      // stay up forever without a pointer event (CineJoy-style). Poking
+      // stay up forever without a pointer event (the lazy-load poster site-style). Poking
       // continuously instead keeps resetting the idle timer on players that
       // auto-hide on their own (MovieBite-style), so their controls — and the
       // center play/pause button — never go away. Poke a bounded number of times,
@@ -1186,7 +1186,7 @@
         if (!done) {
           done = true;
           if (target && frameIsFlixer(target)) {
-            // Flixer keeps the native fullscreen path (trusted tap, PowerVR constraints).
+            // the poster-grid site keeps the native fullscreen path (trusted tap, PowerVR constraints).
             var nfn = __nativeFsFns.requestFullscreen || __nativeFsFns.webkitRequestFullscreen || null;
             if (nfn) {
               try { var p = nfn.call(target); if (p && typeof p.catch === 'function') p.catch(function () { /* refused */ }); } catch (x) { /* ignore */ }
@@ -1399,7 +1399,7 @@
     }, 1000);
   }
 
-  // (quality scan listener is registered after the flixer guard below)
+  // (quality scan listener is registered after the poster-grid site guard below)
 
   // ------------------------------------------------------------------ one video at a time
   // Weak TV hardware has room for one video decoder. When a hidden preview, an ad and the real
@@ -1437,7 +1437,7 @@
     } catch (e) { /* ignore */ }
   }
 
-  // Flixer: suppress the player's auto-fullscreen. The flixer watch page calls
+  // the poster-grid site: suppress the player's auto-fullscreen. The poster-grid site watch page calls
   // requestFullscreen() on the player container when playback starts, which triggers
   // native fullscreen. The video should stay inline until the user clicks the player
   // or the menu button. So we block requestFullscreen() calls that happen within a
@@ -1446,7 +1446,7 @@
   //
   // Minimal by design: one capture-phase 'play' listener + one prototype modification.
   // No timers, no continuous polling — to avoid the PowerVR GPU crash that heavier
-  // instrumentation triggers on flixer.
+  // instrumentation triggers on the poster-grid site.
   if (__isFlixer) {
     (function installFlixerFsGuard() {
       if (window.__fbFlixerFsGuard) return;
@@ -1472,11 +1472,11 @@
     })();
   }
 
-  // Flixer: stop here. The passive __fb API above is available for explicit Android-driven
+  // the poster-grid site: stop here. The passive __fb API above is available for explicit Android-driven
   // commands (video controls, typing). Everything below installs continuous capture-phase
   // event listeners, media health timers, HLS constructor hooks, and synthetic click
   // forwarding — all of which add GPU/CPU load that triggers the PowerVR driver crash
-  // during flixer's intro animation.
+  // during the poster-grid site's intro animation.
   if (__isFlixer) return;
 
   // Dead-video auto-retry: reload once if the player's video never loads (flaky CDN).
@@ -1486,8 +1486,8 @@
   // in normal mode (it only composites when the iframe is position:fixed).
   installPlayerPin();
 
-  // Auto-hide the player's controls in full screen (CineJoy and similar): synthetic pointer
-  // activity on the video, driven by the player's own idle logic. Not installed on flixer.
+  // Auto-hide the player's controls in full screen (the lazy-load poster site and similar): synthetic pointer
+  // activity on the video, driven by the player's own idle logic. Not installed on the poster-grid site.
   //
   // YouTube (and other show-on-activity players) do the OPPOSITE of hide-on-idle: any pointer
   // activity re-shows the controls, which then hide after ~3 s. Our 1.5 s mousemove fires before
@@ -1498,7 +1498,7 @@
 
   // Replace native fullscreen with the CSS fullscreen above, so Chromium's native
   // FullScreenView (and its persistent center button) is never created. Runs at document
-  // start, before page scripts; never on flixer (which returned above).
+  // start, before page scripts; never on the poster-grid site (which returned above).
   (function installCssFullscreenIntercept() {
     if (window.__fbFsIntercept) return;
     window.__fbFsIntercept = true;
@@ -1573,12 +1573,12 @@
     } catch (e) { /* if the document state cannot be faked, players may misbehave, but fullscreen itself still works */ }
   })();
 
-  // StreamCorner: remove sandbox attribute from player iframes BEFORE they load.
+  // the cross-origin player site: remove sandbox attribute from player iframes BEFORE they load.
   // The player checks its security context and refuses to play if sandboxed.
   // We need to remove the sandbox attribute before the iframe navigates.
   if (__isStreamCorner) installSandboxRemover();
 
-  // StreamCorner: remove sandbox attribute from player iframes BEFORE they load.
+  // the cross-origin player site: remove sandbox attribute from player iframes BEFORE they load.
   // The player checks its security context and refuses to play if sandboxed.
   // We need to remove the sandbox attribute before the iframe navigates.
   function installSandboxRemover() {
@@ -1637,11 +1637,11 @@
     // Stop after 30 seconds (iframes should be loaded by then)
     setTimeout(function() { clearInterval(sandboxTimer); }, 30000);
     
-    // Hide the StreamCorner error overlay (video plays behind it)
+    // Hide the cross-origin player site error overlay (video plays behind it)
     installStreamCornerErrorHider();
   }
   
-  // The StreamCorner player shows a "Remove sandbox attributes" error overlay
+  // The cross-origin player site player shows a "Remove sandbox attributes" error overlay
   // even when the video is playing. Hide the overlay so the user can see the video.
   function installStreamCornerErrorHider() {
     if (window.__fbScErrorHiderInstalled) return;
@@ -1678,8 +1678,8 @@
 
 
   // Start quality preference scanning when a video element appears (player is loading).
-  // Registered after the flixer guard: the interval scan adds CPU load that triggers
-  // the PowerVR driver crash during flixer's intro animation.
+  // Registered after the poster-grid site guard: the interval scan adds CPU load that triggers
+  // the PowerVR driver crash during the poster-grid site's intro animation.
   document.addEventListener('loadedmetadata', function () {
     if (!qualityScanTimer) scanForQualityPlayers();
     if (diagnosticEnabled) {
@@ -1983,7 +1983,7 @@
 
   var geometryReported = false;
   // Existing media events/coordination refresh the native flag in each frame.
-  // No new idle-frame bridge poll, timer, message channel or Flixer instrumentation.
+  // No new idle-frame bridge poll, timer, message channel or the poster-grid site instrumentation.
   function refreshDiagnostics() {
     var enabled = bridgeCall('isDiagnosticsEnabled');
     if (typeof enabled === 'boolean' && enabled !== diagnosticEnabled) window.__fb.setDiagnosticLogging(enabled);
@@ -2142,7 +2142,7 @@
         var ed = editableOf(ae);
         // Only open the keypad when the tap actually landed on the field itself.
         // Otherwise a tap on the player/video area can leave a chat box focused as a
-        // side effect and pop the keypad unexpectedly (StreamCorner chat, etc.).
+        // side effect and pop the keypad unexpectedly (the cross-origin player site chat, etc.).
         var onField = false;
         if (ed && e.target) {
           onField = (e.target === ed) || (ed.contains && ed.contains(e.target));

@@ -55,11 +55,11 @@ where the symptom appears).
 | **Video decode + composite** | High, continuous, per-frame | Compositing failure (black video) when residual state is high | The usual *victim*, not the cause |
 | **Residual video state** (not cleared on nav) | Accumulates across site hops | Frame drops (skipping) after long sessions | Cleared by the `videoActive` render reset |
 | **Player controls re-composite** (e.g. synthetic `mousemove` → show-controls path) | A re-composite of the controls layer | Compositing failure (black video) | The auto-hide regression: added load, no benefit |
-| **Native fullscreen enter/exit** | Surface resize + layer change | Compositing failure | flixer auto-fullscreen suppression removes this |
-| **Off-screen poster decode/composite** (TMDB grid) | Texture upload + composite for every image | Crash / compositing failure on flixer-after-video | Cleared by TMDB image virtualization |
+| **Native fullscreen enter/exit** | Surface resize + layer change | Compositing failure | poster-grid site auto-fullscreen suppression removes this |
+| **Off-screen poster decode/composite** (TMDB grid) | Texture upload + composite for every image | Crash / compositing failure on poster-grid site-after-video | Cleared by TMDB image virtualization |
 | **1×1 image firewall** | Reduces texture load but the request/decode still happens | (incomplete fix) | Why virtualization was needed |
 | **Popup/overlay DOM churn** | Layout + composite per kill | Minor; can add up on ad-heavy pages | `popup_guard.js` |
-| **Continuous JS polling / instrumentation** | CPU mostly, but any forced re-render adds GPU load | Indirect; heavy instrumentation crashed flixer | Why the flixer fs-guard is minimal (no timers) |
+| **Continuous JS polling / instrumentation** | CPU mostly, but any forced re-render adds GPU load | Indirect; heavy instrumentation crashed poster-grid site | Why the poster-grid site fs-guard is minimal (no timers) |
 | **Diagnostic logging** | Negligible GPU; but log rotation pressure | Evidence loss (not a GPU failure) | Why `net_segment` was coalesced |
 
 ## 4. The non-obvious coupling edges
@@ -71,7 +71,7 @@ These are the connections that are *not* intuitive — the ones that cause the l
    show-controls path → GPU re-composite → black video. *The input subsystem and the video
    subsystem are coupled through the GPU budget, not through any shared code.*
 
-2. **A poster grid can crash a video site's aftermath.** Loading flixer (a poster grid)
+2. **A poster grid can crash a video site's aftermath.** Loading poster-grid site (a poster grid)
    *after* a video site crashes, because the video left residual GPU state and the grid's
    ~182-image decode/composite pushed it over the edge. *Two unrelated pages are coupled
    through residual state that outlives the navigation.*
@@ -83,7 +83,7 @@ These are the connections that are *not* intuitive — the ones that cause the l
    + the load model. *The measurement subsystem is coupled to the failure mode in a way
    that makes the failure invisible to the probe.*
 
-4. **A network failure can masquerade as a GPU failure.** A MovY video that goes black
+4. **A network failure can masquerade as a GPU failure.** A video from the site that goes black
    because its HLS segments fail (`net::ERR_FAILED`, `0×0`, `readyState=0`) looks
    superficially like a compositing failure (black video). The discriminator: a network
    failure has `readyState=0` and no frames; a compositing failure has frames climbing.
@@ -100,13 +100,13 @@ These comments mark where the coupling was discovered. Keep them accurate:
 - `flixer_image_guard.js` (~L89) — "the 1×1 firewall reduced GPU texture load but the
   request/decode/composite for all 182 images still happened. With prior video GPU state
   resident, that residual load pushed the PowerVR driver over the edge."
-- `MainActivity.kt` (~L395) — "flixer crashes (KEGLReleaseRenderTarget) when loaded after
-  a video site (coreflix/cinejoy) — residual video GPU state tips the PowerVR driver over
+- `MainActivity.kt` (~L395) — "poster-grid site crashes (KEGLReleaseRenderTarget) when loaded after
+  a video site (video site/lazy-load poster site) — residual video GPU state tips the PowerVR driver over
   the edge."
 - `MainActivity.kt` (~L1678) — "Script completion/timeout is NOT proof of native resource
   release." (the basis for the `videoActive` render reset)
 - `page_helpers.js` `installFlixerFsGuard` — "No timers, no continuous polling — to avoid
-  the PowerVR GPU crash that heavier instrumentation triggers on flixer."
+  the PowerVR GPU crash that heavier instrumentation triggers on poster-grid site."
 
 ## 6. How to use this map when making a fix
 

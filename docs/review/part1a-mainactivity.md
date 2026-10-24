@@ -42,7 +42,7 @@
 - Line 153: `@Volatile inputFrame` — frame name of the currently focused input (empty = top frame).
 - Lines 154–156: `inputFieldState` (JSON state blob from the page describing the focused field), `inputFieldId`, `inputFocusConfirmed` (page confirmed focus on the field).
 - Lines 157–162: page-edit machinery: `PageEdit(action, text, session, token, frame, field)` data class; `pageEdits` ArrayDeque (queued edits); `pageEditActive` (edit currently in flight to the page); `nativeEditCancel` (cancellation hook registered by the native editor path); `keyboardDismissedUntil` — until this timestamp, `focusFromPage` refuses to open the keypad (after a deliberate keyboard dismissal, so a stale focus event doesn't re-open it).
-- Lines 163–165: injected JS blobs: `fmhyThemeJs` (FMHY theme script), `tvUiJs` (the main `__tvUi` page script), `seekClickJs` (seek-bar click repair script).
+- Lines 163–165: injected JS blobs: `fmhyThemeJs` (SPA portal theme script), `tvUiJs` (the main `__tvUi` page script), `seekClickJs` (seek-bar click repair script).
 - Lines 166–168: `scrollXPending`, `scrollYPending`, `scrollPending` — coalesced scroll deltas waiting to be sent to the page (one wheel event per frame).
 - Lines 169–171: `seekRepeat = SeekRepeatPolicy()` (repeat/hold policy for seek keys), `seekGeneration` (generation counter so stale seek completions are ignored), `idleQueryPending` (only one idle-state JS query in flight).
 - Lines 172–196: `idleCheck` self-rescheduling Runnable (every 10s):
@@ -127,10 +127,10 @@
 - Lines 357–358: `scriptsAtDocumentStart` / `uiScriptsAtDocumentStart` — whether the guard/helper scripts and UI scripts were injected at document start (vs. fallback injection on page finish).
 - Lines 359–361: `guardJs`, `helpersJs`, `flixerImageGuardJs` — the injected script blobs (loaded from assets in `installScripts`, line 778).
 - Lines 363–368: TMDB image virtualization comment + `@Volatile tmdbAllowlist: MutableSet<String>` — allowlist of image URLs currently visible on a guarded poster-grid host; requests not in the set get a 1x1 transparent pixel. Purpose: keep GPU texture count low enough to avoid the PowerVR `KEGLReleaseRenderTarget` crash.
-- Line 369: `@Volatile onFlixerPage` — active page is flixer (affects tap behavior, e.g., `tapPlayerFrame(mouse = onFlixerPage)` at line 2375).
-- Lines 370–372: `@Volatile onImageGuardedPage` — active page is a guarded poster-grid host (flixer or cinejoy) → TMDB image firewall active.
-- Lines 374–381: `isImageGuardedHost(host)` — true for `flixer.gd` (+subdomains), `flixer.su` (+subdomains), `cinejoy.pk` (+subdomains). Comment: flixer loads a ~180-poster intro burst; cinejoy lazy-loads a large grid; both produce GPU texture churn that tips the PowerVR driver over.
-- Lines 383–387: `@Volatile lastNonFlixerHost` — tracks the last non-flixer host so a video-site → flixer transition can force a render reset (flixer crashes when loaded right after a video site due to residual video GPU state).
+- Line 369: `@Volatile onFlixerPage` — active page is poster-grid site (affects tap behavior, e.g., `tapPlayerFrame(mouse = onFlixerPage)` at line 2375).
+- Lines 370–372: `@Volatile onImageGuardedPage` — active page is a guarded poster-grid host (poster-grid site or lazy-load poster site) → TMDB image firewall active.
+- Lines 374–381: `isImageGuardedHost(host)` — true for `flixer.gd` (+subdomains), `flixer.su` (+subdomains), `cinejoy.pk` (+subdomains). Comment: poster-grid site loads a ~180-poster intro burst; lazy-load poster site lazy-loads a large grid; both produce GPU texture churn that tips the PowerVR driver over.
+- Lines 383–387: `@Volatile lastNonFlixerHost` — tracks the last non-poster-grid site host so a video-site → poster-grid site transition can force a render reset (poster-grid site crashes when loaded right after a video site due to residual video GPU state).
 
 ## 389–411: Remote pointer state
 - Lines 390–391: `cx`, `cy` — pointer position in screen coordinates (the "mouse" the page sees).
@@ -185,7 +185,7 @@
 9. Line 500: `softwareRendering` from prefs.
 10. Line 505: `requestStoragePermission()` — bookmark export writes to public Downloads; on API 23+ needs runtime WRITE_EXTERNAL_STORAGE; requested up front so export just works.
 11. Lines 507–516: construct `Ui`, `PopupGuard`, `BookmarkStore.shared`, `AudioManager`; read the six injected-JS assets: `popup_guard.js`, `page_helpers.js`, `flixer_image_guard.js`, `fmhy_theme.js`, `tv_ui.js`, `seek_click.js`.
-12. Lines 518–529: build view tree: black `root` FrameLayout → `TvWebView` (black bg; `LAYER_TYPE_SOFTWARE` if softwareRendering — avoids the PowerVR SIGSEGV in glBindFramebuffer on flixer) → `progress` BarView (GONE, height ui.u(4)) → `cursor` CursorView (size ui.u(26), GONE, centered: `cx = screenW/2`, `cy = screenH/2`).
+12. Lines 518–529: build view tree: black `root` FrameLayout → `TvWebView` (black bg; `LAYER_TYPE_SOFTWARE` if softwareRendering — avoids the PowerVR SIGSEGV in glBindFramebuffer on poster-grid site) → `progress` BarView (GONE, height ui.u(4)) → `cursor` CursorView (size ui.u(26), GONE, centered: `cx = screenW/2`, `cy = screenH/2`).
 13. Lines 543–557: `StartPage` with listener: `openUrl(url)` → `openUrl(url)`; `search()` → `promptUrl()`; `manage(folder)` → `showBookmarks(folder, 0)`.
 14. Lines 559–574: `MenuPanel`, `ListPanel`, `TextPanel`, `Keypad` (width min(screenW-40, 820), bottom-center, bottomMargin 14; `keypad.listener = keypadListener`; an OnLayoutChangeListener calls `updateEditorViewport()` — the editor viewport must track the keypad's size).
 15. Lines 576–585: `fullscreenBox` (black, GONE), `osd` (width min(screenW-80, 620), bottom-center, margin 30).
@@ -265,9 +265,9 @@
 - Resets `scriptsAtDocumentStart`/`uiScriptsAtDocumentStart` to false.
 - If `WebViewFeature.DOCUMENT_START_SCRIPT` supported: register document-start scripts for all origins (`setOf("*")`):
   - `guardJs` (popup_guard.js) and `helpersJs` (page_helpers.js) — must run before any page script, in every frame. Comment: do NOT rewrite navigator.webdriver (keep the environment unmodified for verification compatibility).
-  - `flixerImageGuardJs` — the flixer TMDB image firewall, registered at DOCUMENT START. Long comment (788–800): this is the fix for the flixer PowerVR crash. The guard must observe the poster grid BEFORE flixer's scripts append ~180 TMDB posters so its allowlist sync runs during the burst. Injecting only from onPageCommitVisible ran too late (sync saw count:0, allowlist empty, full 182-image burst hit the GPU → SIGSEGV in KEGLReleaseRenderTarget). At document start it runs in every frame before any page script; visible posters get real textures, off-screen ones get 1x1 pixels via shouldInterceptRequest. Self-guards on the flixer host, idempotent, so all origins is safe.
+  - `flixerImageGuardJs` — the poster-grid site TMDB image firewall, registered at DOCUMENT START. Long comment (788–800): this is the fix for the poster-grid site PowerVR crash. The guard must observe the poster grid BEFORE poster-grid site's scripts append ~180 TMDB posters so its allowlist sync runs during the burst. Injecting only from onPageCommitVisible ran too late (sync saw count:0, allowlist empty, full 182-image burst hit the GPU → SIGSEGV in KEGLReleaseRenderTarget). At document start it runs in every frame before any page script; visible posters get real textures, off-screen ones get 1x1 pixels via shouldInterceptRequest. Self-guards on the poster-grid site host, idempotent, so all origins is safe.
   - Then `scriptsAtDocumentStart = true`.
-  - Nested try: `fmhyThemeJs` (only for `https://fmhy.net` + `https://*.fmhy.net`) and `tvUiJs` (all origins); on success `uiScriptsAtDocumentStart = true`; on failure log `ui_scripts_install_failed` (comment 803: an optional UI/theme failure must never prevent Flixer's intro fix).
+  - Nested try: `fmhyThemeJs` (only for `https://fmhy.net` + `https://*.fmhy.net`) and `tvUiJs` (all origins); on success `uiScriptsAtDocumentStart = true`; on failure log `ui_scripts_install_failed` (comment 803: an optional UI/theme failure must never prevent poster-grid site's intro fix).
   - Log `scripts_installed` {mode: document_start, frames: all}.
 - Outer catch: `scriptsAtDocumentStart = false`, log `scripts_install_failed` (error class name truncated to 120 chars).
 
@@ -275,7 +275,7 @@
 - For old WebViews without document-start scripts: on page events, `evaluateJavascript` the guard+helpers (if `!scriptsAtDocumentStart`) and the theme+tvUi scripts (if `!uiScriptsAtDocumentStart`). Scripts are idempotent so double-injection is safe.
 
 ## 832–849: `injectDarkMode(view)` — deliberately empty
-- Big comment: dark mode is handled entirely by Chromium's render-client darkening (FORCE_DARK_ON, set in `applyDarkMode`, line 3562). NO CSS injection — injected style tags trigger GPU compositing issues on the PowerVR driver (flixer crashes). fmhy (VitePress) doesn't get darkened because it declares color-scheme in its CSS, which makes Chromium skip render-client darkening — known limitation. "Do NOT add any evaluateJavascript style injection here." When dark mode is off, it cleans up style tags left by older app versions (per the doc comment at 832–840). Called from onPageCommitVisible and onPageFinished.
+- Big comment: dark mode is handled entirely by Chromium's render-client darkening (FORCE_DARK_ON, set in `applyDarkMode`, line 3562). NO CSS injection — injected style tags trigger GPU compositing issues on the PowerVR driver (poster-grid site crashes). SPA portal (VitePress) doesn't get darkened because it declares color-scheme in its CSS, which makes Chromium skip render-client darkening — known limitation. "Do NOT add any evaluateJavascript style injection here." When dark mode is off, it cleans up style tags left by older app versions (per the doc comment at 832–840). Called from onPageCommitVisible and onPageFinished.
 
 ## 851–857: `buildDesktopUa(ua)`
 - Extracts the Chrome version from the default UA via regex `Chrome/([0-9.]+)` (fallback "120.0.0.0") and builds a Windows desktop UA: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/<ver> Safari/537.36`. Comment: changes reported identity only; does not turn Android WebView into desktop Chrome.
@@ -321,8 +321,8 @@
 - Line 948: log `page_commit_visible` {url}.
 - Lines 949–951: `injectFallback(view)`, `injectDarkMode(view)` (no-op, see above), and `evaluateJavascript(fmhyThemeJs)` directly (belt-and-suspenders for the theme script).
 - Lines 952–964: TMDB image firewall activation. Parse host (lowercased, trailing dot removed). `isFlixer` = flixer.gd/flixer.su (+subdomains); `isImageGuarded` = `isImageGuardedHost(host)` (adds cinejoy.pk). If the guarded state changed: update `onImageGuardedPage`; if leaving a guarded host, `tmdbAllowlist.clear()`; log `image_firewall` {active, host, allowlistSize}.
-- Lines 965–990: flixer state change handling. If `onFlixerPage` changed: update, log `flixer_image_firewall` {active, allowlistSize}. **GPU render reset** (971–989): flixer crashes (KEGLReleaseRenderTarget) when loaded after a video site — residual video GPU state tips the PowerVR driver over. On the video-site → flixer transition (`isFlixer && lastNonFlixerHost.isNotEmpty()`): log `flixer_render_reset` {from}, then `pauseTimers()` + `invalidate()`, and 150ms later `resumeTimers()` + `invalidate()` — a forced render reset.
-- Lines 991–994: track `lastNonFlixerHost` (only non-flixer, non-empty hosts).
+- Lines 965–990: poster-grid site state change handling. If `onFlixerPage` changed: update, log `flixer_image_firewall` {active, allowlistSize}. **GPU render reset** (971–989): poster-grid site crashes (KEGLReleaseRenderTarget) when loaded after a video site — residual video GPU state tips the PowerVR driver over. On the video-site → poster-grid site transition (`isFlixer && lastNonFlixerHost.isNotEmpty()`): log `flixer_render_reset` {from}, then `pauseTimers()` + `invalidate()`, and 150ms later `resumeTimers()` + `invalidate()` — a forced render reset.
+- Lines 991–994: track `lastNonFlixerHost` (only non-poster-grid site, non-empty hosts).
 - Lines 995–998: if image-guarded, `evaluateJavascript(flixerImageGuardJs)` (idempotent — safe repeatedly).
 
 ## 1001–1018: `Client.onReceivedError(view, request, error)` (API M+)
