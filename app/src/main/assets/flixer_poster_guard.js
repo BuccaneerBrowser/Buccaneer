@@ -53,10 +53,10 @@
 
   function log(msg, data) {
     try {
-      if (window.Buccaneer && window.Buccaneer.diagnostic) {
-        window.Buccaneer.diagnostic('poster_guard', data || {});
+      if (window.Buccaneer && typeof window.Buccaneer.diagnosticEvent === 'function') {
+        window.Buccaneer.diagnosticEvent(String(msg), JSON.stringify(data || {}));
       }
-    } catch (e) { /* never throw */ }
+    } catch (e) { /* never throw — diagnostics are best effort */ }
   }
 
   function ensureStyle() {
