@@ -24,7 +24,9 @@
  * checked for position:fixed + contains <img>) — NOT a full-DOM walk, so it
  * does not trigger the PowerVR driver crash the full popup scanner does.
  *
- * Re-applied on a slow interval to handle SPA navigation and re-creation.
+ * Re-applied event-driven (deferred ~150 ms after a tracked poster click or
+ * focus) plus a slow 2 s safety-net interval for SPA re-creation, where the
+ * card element is rebuilt without a page commit (no re-injection).
  * Must never throw, never block page load, safe to re-inject.
  *
  * Chromium 118 on API 25: NO `??` or `?.` operators.
@@ -68,15 +70,23 @@
     } catch (e) { /* never throw */ }
   }
 
+  // Whole-class match (avoids `z-10` matching `z-100` via substring).
+  function hasClass(cls, name) {
+    var i, arr = cls.split(' ');
+    for (i = 0; i < arr.length; i++) if (arr[i] === name) return true;
+    return false;
+  }
+
   // True if the element (or an ancestor up to the poster card) is a poster card.
-  // Poster cards carry `cursor-pointer` + an `aspect` class.
+  // Poster cards carry `cursor-pointer` + `z-10` (verified against live markup:
+  // every poster card has both; nav links, buttons, and layout divs do not).
   function isPosterCard(el) {
     try {
       var node = el;
       while (node && node !== document) {
         var cls = '';
         try { cls = (node.className || '').toString(); } catch (e) {}
-        if (cls.indexOf('cursor-pointer') >= 0 && cls.indexOf('aspect') >= 0) return true;
+        if (hasClass(cls, 'cursor-pointer') && hasClass(cls, 'z-10')) return true;
         node = node.parentElement;
       }
     } catch (e) { /* never throw */ }
@@ -86,10 +96,14 @@
   // Track the last interaction that could reveal the floating card.
   // Capture phase so we see the event before the page's own handlers.
   document.addEventListener('click', function (e) {
-    try { if (isPosterCard(e.target)) lastEventType = 'click'; } catch (e) { /* never throw */ }
+    try {
+      if (isPosterCard(e.target)) { lastEventType = 'click'; scheduleApply(); }
+    } catch (e) { /* never throw */ }
   }, true);
   document.addEventListener('focusin', function (e) {
-    try { if (isPosterCard(e.target)) lastEventType = 'focus'; } catch (e) { /* never throw */ }
+    try {
+      if (isPosterCard(e.target)) { lastEventType = 'focus'; scheduleApply(); }
+    } catch (e) { /* never throw */ }
   }, true);
 
   function findCard() {
@@ -139,6 +153,25 @@
     }
   }
 
+  // Event-driven re-check. A tracked poster click/focus is the only thing that
+  // reveals the card, so defer one apply() after each such event. The 150 ms
+  // deferral lets the page's own handlers run first (the card may be created
+  // or shown in response to the event). A single pending timer debounces
+  // rapid DPAD focus events (one apply per burst, not one per keypress).
+  var pendingApplyTimer = null;
+  function scheduleApply() {
+    if (pendingApplyTimer !== null) return;
+    try {
+      pendingApplyTimer = setTimeout(function () {
+        pendingApplyTimer = null;
+        apply();
+      }, 150);
+    } catch (e) { pendingApplyTimer = null; }
+  }
+
   apply();
-  setInterval(apply, 200);
+  // Safety net only: SPA navigation re-creates the card without a page commit
+  // (no re-injection), so a slow periodic re-check must remain. 2 s (was
+  // 200 ms) — the event-driven path above handles reveal latency.
+  setInterval(apply, 2000);
 })();
