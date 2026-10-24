@@ -23,6 +23,31 @@ subsystem over its threshold even when the fix itself is locally correct.
 
 Not yet committed. This is the current state of the device build.
 
+### Hydration indicator (red X) + scroll restore
+- **Fix:** two related UX fixes for SPA portal pages that hydrate for several seconds
+  after the HTML is on screen. (1) While the page is visible but not yet interactive,
+  the pointer turns into a red X so the user knows their clicks will not land yet. It
+  clears when a probe (a trivial JS-eval round trip on the same page thread that queues
+  taps) shows a sustained 3 s fast streak, or after a 20 s timeout. A 2nd `page_finished`
+  is deliberately not used as the settle signal: it can fire before the page is truly
+  interactive (hydration mismatch), which cleared the X early. (2) Some SPA portals call
+  `window.scrollTo(0, 0)` when hydration completes, yanking the user back to the top of a
+  page they had already scrolled. A new document-start script (`scroll_restore.js`)
+  captures the native `scrollTo` and restores the previous position on an abrupt reset to
+  the top, detected in the `scrollTo` wrapper (synchronous) plus a light interval
+  fallback — a timer alone is delayed while the page thread is busy, which is exactly
+  when the reset occurs.
+- **Broke / risked:** none observed. The red X is visual-only (one circle + two lines,
+  drawn only while blocked). The scroll restore acts only on an abrupt reset to the top
+  (a gradual user scroll never triggers it) and debounces at 2 s.
+- **GPU:** neutral (the red X adds one circle + two lines only while blocked; the scroll
+  restore is a single property read per 100 ms tick plus the `scrollTo` wrapper).
+- **Status:** `verified` — on the Fire TV the X cleared ~3 s after the page became
+  interactive (probe signal, not the early 2nd `page_finished`), and the scroll restore
+  fired when the page reset the scroll to 0 mid-hydration (position restored).
+- **Files:** `CursorView.kt` (red X drawing), `MainActivity.kt` (probe + wiring),
+  `scroll_restore.js` (new).
+
 ### Portal page dead to taps for ~7 s, then snaps to the top — popup_guard scan cost
 - **Fix:** `killOverlays()` (popup_guard.js; runs on every page except the image-guarded
   host) walked every
