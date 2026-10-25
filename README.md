@@ -1,4 +1,4 @@
-# Buccaneer 2.3.4
+# Buccaneer 2.3.3
 
 A lightweight web browser for Android TV, designed for remote control navigation and streaming content.
 
