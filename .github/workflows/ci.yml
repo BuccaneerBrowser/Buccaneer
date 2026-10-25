@@ -1,0 +1,68 @@
+name: CI (non-release)
+
+# Continuous integration for every push to main and every pull request.
+# This job NEVER signs or publishes: it builds the debug APK (no keystore,
+# no release secrets) and runs the reliable test checks. The release path
+# (tag push -> signed APK -> GitHub Release) lives in build.yml and is
+# unchanged.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  # Cancel superseded runs for the same ref to keep the queue short.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
+      - name: Run protected-fixes gate
+        # Hash-pins the guard assets + pinned MainActivity.kt regions and runs
+        # the streaming-hardening regression asserts. This is the authoritative
+        # "did a protected fix drift?" check.
+        run: python3 tests/check-protected-fixes.py
+
+      - name: Run Node .cjs test suites
+        # The reliable VM-based suites (seek-click, SPA portal-theme,
+        # release18-script, seek-mapping-integration, integration-pass).
+        # Each exits non-zero on failure, so a single failure fails the step.
+        run: |
+          set -e
+          for f in tests/*.cjs; do
+            echo "=== $f ==="
+            node "$f"
+          done
+
+      - name: Build debug APK
+        # Debug build needs no signing config or secrets.
+        run: gradle assembleDebug --no-daemon
+
+      - name: Verify debug APK
+        run: ls -la app/build/outputs/apk/debug/
+
+      - name: Upload debug APK (artifact)
+        # Retained for inspection only; NOT published as a release.
+        uses: actions/upload-artifact@v4
+        with:
+          name: buccaneer-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
