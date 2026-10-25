@@ -9,7 +9,7 @@ Live tree: `<repo-root>` (v2.3.1). All statuses verified by execution on 2026-10
 | Protected fixes | `python3 tests/check-protected-fixes.py` | **PASS** (exit 0): "PASS: poster-grid site/lazy-load poster site image guard, Popup Guard, native guards, and dark mode preserved." |
 | Warning repairs | `python3 tests/check-warning-repairs.py` | **FAIL** (exit 1): prints the protected-fixes PASS line (it runpy's that script), then dies at line 13 with `AssertionError: flixer_image_guard.js` — the 1.9.1 hardware baseline hash is stale vs the current asset. Steps 5–11 of that script (manifest, icons, lint, @SuppressLint inventory) never execute. |
 
-Node .cjs tests (node v26.8.1 installed): **PASS** — seek-click-tests, SPA portal-theme-tests, release18-script-tests, seek-mapping-integration-tests. **FAIL (stale vs v2.x assets)** — quality-tests (`pickCapLevel` missing from slice), logic19-tests (`wrapHlsConstructor` missing from slice), quality199-startup (`capHls` missing from slice), integration-pass-tests (4/6 fail: mock window lacks `addEventListener`; `capShaka` not in slice). **CANNOT RUN** — cinejoy199-quality (its asset `cinejoy_quality.js` was removed from the tree).
+Node .cjs tests (node v26.8.1 installed): **PASS** — seek-click-tests, SPA portal-theme-tests, release18-script-tests, seek-mapping-integration-tests, integration-pass-tests. The stale quality/HLS-cap tests (quality-tests, logic19-tests, quality199-startup, and one more whose asset was removed from the tree) were deleted 2026-10-24 — they referenced functions no longer present in the assets (`pickCapLevel`, `wrapHlsConstructor`, `capHls`, `capShaka`). integration-pass-tests was repaired the same day: its mock gained the window/document methods the current `page_helpers.js` IIFE calls at load, and its two stale Shaka checks were dropped.
 Headless-Chromium runners (5) and Playwright DOM tests (3): **CANNOT RUN here** — no chromium/chromium-browser/google-chrome binary and no `playwright` module in this environment.
 Kotlin Robolectric tests (15 classes): **CANNOT RUN here** — no `gradlew` wrapper script in repo root, no Android SDK (`ANDROID_HOME` unset, no `local.properties`). CI (`.github/workflows/build.yml`) only builds the release APK on tags; it does not run the unit tests.
 
@@ -398,12 +398,14 @@ It dies at step 4, first script: `flixer_image_guard.js` no longer matches its *
 
 ### Node (.cjs)
 
+> **Updated 2026-10-24:** the stale quality/HLS-cap tests below (quality-tests, logic19-tests, quality199-startup, and the asset-removed test) were deleted, and integration-pass-tests was repaired. All remaining Node .cjs tests now PASS. The per-test analyses that follow are historical (verified 2026-10-21).
+
 # tests/quality-tests.cjs (72 lines)
 
 **What it is:** Node VM test of the ACTUAL shipped `app/src/main/assets/page_helpers.js` quality-capping code (no DOM). Slices the real source between markers (`var QUALITY_MIN` → `// Players usually live`; `var hlsInstances` → `document.addEventListener('loadedmetadata'`) and runs it in a `vm` context with a mock `Hls` class (records options, levels, callbacks; `Hls.Events`, `Hls.isSupported`, `Hls.DefaultConfig`).
 
 **Run:** `cd <repo-root> && node tests/quality-tests.cjs`
-**Current status (verified 2026-10-21, node v26.8.1): FAILS, exit 1** — `TypeError: c.pickCapLevel is not a function` (line 21). The source slice between `var QUALITY_MIN` and `// Players usually live` no longer exposes `pickCapLevel` in the current page_helpers.js — the test is STALE against the v2.x asset.
+**DELETED 2026-10-24** (stale — tested quality-capping functions removed from the assets). Prior status (verified 2026-10-21, node v26.8.1): FAILS, exit 1 — `TypeError: c.pickCapLevel is not a function` (line 21). The source slice between `var QUALITY_MIN` and `// Players usually live` no longer exposes `pickCapLevel` in the current page_helpers.js — the test is STALE against the v2.x asset.
 
 **Checks:**
 1. `pickCapLevel` over 12 height ladders: picks the highest level ≤ 720 (e.g. [144..1080]→720, [480,1080]→480, [400,800,1080]→800, [1080,2160]→1080, [360,1080]→360, unordered [800,400,720]→800, [0,1080]→1080, [0]→null, []→null).
@@ -424,7 +426,7 @@ It dies at step 4, first script: `flixer_image_guard.js` no longer matches its *
 **What it is:** Node VM test of the ACTUAL shipped `page_helpers.js` — HLS capping edge cases + the full `__fb` passive helper on a simulated poster-grid site page (mock video/iframe/DOM).
 
 **Run:** `cd <repo-root> && node tests/logic19-tests.cjs`
-**Current status (verified 2026-10-21, node v26.8.1): FAILS, exit 1** — `TypeError: ctx.wrapHlsConstructor is not a function` (line 6). The source slice no longer defines `wrapHlsConstructor` in the current page_helpers.js — the test is STALE against the v2.x asset.
+**DELETED 2026-10-24** (stale — tested HLS-capping functions removed from the assets). Prior status (verified 2026-10-21, node v26.8.1): FAILS, exit 1 — `TypeError: ctx.wrapHlsConstructor is not a function` (line 6). The source slice no longer defines `wrapHlsConstructor` in the current page_helpers.js — the test is STALE against the v2.x asset.
 
 **Checks:**
 1. Unordered ladder ([1080,720] with mixed bitrates) is NOT falsely represented as a valid 800p ceiling: `capHls` leaves `autoLevelCapping=-1` but sets `nextAutoLevel=1` (ABR remains available).
@@ -443,11 +445,11 @@ It dies at step 4, first script: `flixer_image_guard.js` no longer matches its *
 **What it is:** Node VM integration test combining the ACTUAL `page_helpers.js` and `tv_ui.js` sources against a simulated nested-iframe poster-grid site page and mock CSS style objects. Uses a `check(name, fn)` harness that counts failures and sets `process.exitCode=1` at the end.
 
 **Run:** `cd <repo-root> && node tests/integration-pass-tests.cjs`
-**Current status (verified 2026-10-21, node v26.8.1): FAILS, exit 1 — 4 of 6 checks fail.** PASS: both tv_ui.js setFit/restoreMenus CSS checks. FAIL: "focused same-origin iframe exposes its reachable movie…" and "nested reachable movie center…" (`window.addEventListener is not a function` — the mock window lacks addEventListener, which the current page_helpers.js now calls at load), and both Shaka checks (`c.capShaka is not a function` — capShaka is no longer in the quality slice region). The test is STALE against the v2.x assets.
+**REPAIRED 2026-10-24 — now PASSES (4/4 checks).** The mock window/document gained the methods the current `page_helpers.js` IIFE calls at load (`addEventListener`, `removeEventListener`, `scrollTo`, `scrollX/Y`, `top`, `Element`, `HTMLInputElement`, `HTMLTextAreaElement`), and the two stale Shaka checks were dropped. Prior status (verified 2026-10-21): FAILS, exit 1 — 4 of 6 checks fail. PASS: both tv_ui.js setFit/restoreMenus CSS checks. FAIL: "focused same-origin iframe exposes its reachable movie…" and "nested reachable movie center…" (`window.addEventListener is not a function` — the mock window lacks addEventListener, which the current page_helpers.js now calls at load), and both Shaka checks (`c.capShaka is not a function` — capShaka is no longer in the quality slice region). The test is STALE against the v2.x assets.
 
 **Fixture (`makePlayer`):** top window (flixer.gd, 1280×720) containing an IFRAME (rect 500,100 → 904,404; offsetWidth/Height 404×304, clientLeft/Top 2) whose same-origin contentDocument holds a 300×200 video at (20,30) in a 400×300 inner window.
 
-**Checks (6):**
+**Checks (4 after the 2026-10-24 repair; originally 6 — the two Shaka checks below, 5 and 6, were dropped as stale):**
 1. A focused same-origin iframe exposes its reachable movie instead of becoming opaque: `__fb.state()` reports `f:1`.
 2. Nested reachable movie center maps into top-page coordinates: `__fb.frameCenter()` ≈ (672/1280, 232/720) — iframe offset + clientLeft/Top + scale all accounted for.
 3. CSS serialization cannot prevent restoration of a fractional menu offset: `setFit(el,'margin-top','148.000006px')` then `restoreMenus()` clears it (mock style with px rounding).
@@ -455,7 +457,7 @@ It dies at step 4, first script: `flixer_image_guard.js` no longer matches its *
 5. Shaka honors manual ABR-off mode: with `abr.enabled=false`, `capShaka` does NOT select a replacement track (selected stays 0).
 6. Shaka repairs an externally reset cap even when the ladder is unchanged: maxHeight reset to Infinity → next `capShaka` restores 720.
 
-**Protects:** page_helpers.js cross-frame state/frameCenter mapping, tv_ui.js `setFit`/`restoreMenus` (original-value restoration, fractional px), Shaka ABR-off respect and cap repair.
+**Protects:** page_helpers.js cross-frame state/frameCenter mapping, tv_ui.js `setFit`/`restoreMenus` (original-value restoration, fractional px). (The Shaka ABR-off/cap-repair protections were dropped 2026-10-24 with the stale Shaka checks.)
 
 # tests/seek-click-tests.cjs (37 lines)
 
@@ -500,7 +502,7 @@ It dies at step 4, first script: `flixer_image_guard.js` no longer matches its *
 **What it is:** Node VM test of the ACTUAL `page_helpers.js` startup quality-preference logic — slices the real source between `function qualityPreferenceFor(player)` and `function capShaka(player)` and runs it with a mock bridge (`bridgeCall` → quality preference JSON), `QUALITY_MIN=400`, `QUALITY_MAX=800`.
 
 **Run:** `cd <repo-root> && node tests/quality199-startup.cjs`
-**Current status (verified 2026-10-21, node v26.8.1): FAILS, exit 1** — `TypeError: c.capHls is not a function` (line 5). The slice between `qualityPreferenceFor` and `capShaka` no longer contains the capHls definition in the current page_helpers.js — the test is STALE against the v2.x asset.
+**DELETED 2026-10-24** (stale — tested startup quality-preference functions removed from the assets). Prior status (verified 2026-10-21, node v26.8.1): FAILS, exit 1 — `TypeError: c.capHls is not a function` (line 5). The slice between `qualityPreferenceFor` and `capShaka` no longer contains the capHls definition in the current page_helpers.js — the test is STALE against the v2.x asset.
 
 **Checks (5):**
 1. First app preference (720, revision 0) overrides the site startup 1080: `capHls` sets `autoLevelCapping=1` and `currentLevel=-1` (forces ABR to re-pick under the cap) — even at revision 0.
@@ -546,7 +548,7 @@ String literals are unescaped via `JSON.parse('"' + literal + '"')` and concaten
 **What it is:** Node VM test of `app/src/main/assets/cinejoy_quality.js` — the lazy-load poster site site-specific quality-seeding helper (`__buccaneerCinejoyQuality`). Simulates cinejoy.pk with a localStorage holding `cinejoy_player_local` settings and a `Buccaneer.qualityPreference` bridge.
 
 **Run:** `cd <repo-root> && node tests/cinejoy199-quality.cjs`
-**Current status (verified 2026-10-21): CANNOT RUN, exit 1** — `ENOENT: app/src/main/assets/cinejoy_quality.js` is absent (assets dir contains only flixer_image_guard.js, fmhy_theme.js, page_helpers.js, popup_guard.js, seek_click.js, tv_ui.js). Confirmed removed in v2.x; this test is dead with the asset.
+**DELETED 2026-10-24** (dead — its asset was removed from the tree in v2.x). Prior status (verified 2026-10-21): CANNOT RUN, exit 1 — `ENOENT: app/src/main/assets/cinejoy_quality.js` is absent (assets dir contains only flixer_image_guard.js, fmhy_theme.js, page_helpers.js, popup_guard.js, seek_click.js, tv_ui.js). Confirmed removed in v2.x; this test is dead with the asset.
 
 **Checks (5, if the asset exists):**
 1. Startup 1080 (site default) is replaced by the saved app preference 720 WITHOUT erasing other settings (volume .4 kept).

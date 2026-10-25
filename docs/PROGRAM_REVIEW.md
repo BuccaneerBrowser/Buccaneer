@@ -571,9 +571,7 @@ Key calls: `Runtime.evaluate` (returnByValue, contextId), `Page.getFrameTree` (f
 |---|---|---|
 | Protected fixes | `python3 tests/check-protected-fixes.py` | **PASS** |
 | Warning repairs | `python3 tests/check-warning-repairs.py` | **FAIL (pre-existing)** -- stale 1.9.1 hardware-baseline hash for `flixer_image_guard.js`; dies at its line 13 before steps 5-11 run |
-| Node .cjs (seek-click, SPA portal-theme, release18-script, seek-mapping-integration) | `node tests/<name>` | **PASS** |
-| Node .cjs (quality-tests, logic19-tests, quality199-startup, integration-pass-tests) | `node tests/<name>` | **FAIL (stale vs v2.x assets)** -- reference functions removed from the assets (`pickCapLevel`, `wrapHlsConstructor`, `capHls`, `capShaka`) |
-| cinejoy199-quality | -- | **CANNOT RUN** -- its asset `cinejoy_quality.js` was removed from the tree |
+| Node .cjs (seek-click, SPA portal-theme, release18-script, seek-mapping-integration, integration-pass) | `node tests/<name>` | **PASS** |
 | Headless-Chromium runners (5) + Playwright DOM tests (3) | -- | **CANNOT RUN here** -- no chromium/playwright in this environment |
 | Kotlin unit tests (15 classes) | `gradle test` (with `source <android-env>/env.sh`) | not run in this review; CI does not run them (builds release APK on tags only) |
 
