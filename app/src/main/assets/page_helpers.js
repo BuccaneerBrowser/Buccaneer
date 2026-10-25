@@ -459,6 +459,7 @@
     try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
     if (window === window.top) cssFsNotifyApp(true); else cssFsPostParent(true);
     installFsResumeGuard(el);
+    installStalePointerGuard(el);
     return Promise.resolve();
   }
 
@@ -500,6 +501,7 @@
     cssFsRemoveScrollGuard();
     if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
     cssFs.wasPlaying = false;
+    try { removeStalePointerGuard(); } catch (e) { /* ignore */ }
     try { if (el) cssFsRestore(el, cssFs.saved); } catch (e) { /* ignore */ }
     cssFs.saved = null;
     pinPlayerFrame(); // re-pin the player iframe now that CSS fullscreen is gone
@@ -712,6 +714,90 @@
     }
     document.addEventListener('fullscreenchange', onFsChange, true);
     document.addEventListener('webkitfullscreenchange', onFsChange, true);
+  }
+
+  // ------------------------------------------------------------------ stale pointer guard
+  //
+  // Chromium remembers the last real pointer position and re-runs hit-testing at that
+  // position whenever an element's pointer-events (or layout) changes. On a TV the last
+  // position is wherever the user last touched the screen — often over the player's
+  // bottom control bar. When the player's own idle timer hides the bar (adding
+  // player-fade-out, which sets pointer-events:none), the hit-test at the stale position
+  // now lands on the video, and the browser fires a TRUSTED mouseout/mouseleave on the
+  // bar. Nova's bottom bar treats mouseleave as "re-show the controls" (its scrub-release
+  // path), so the bar re-appears ~30 ms after every auto-hide and the 3 s timer restarts:
+  // the controls flicker forever.
+  //
+  // While CSS fullscreen is active we swallow mouseout/mouseleave on the control bars
+  // that arrive within 500 ms of a fade-out class change with no real pointer activity in
+  // between — the artifact's exact signature. Real pointer input (a tap, a drag, a mouse
+  // move) updates lastRealAt and is never swallowed.
+  var staleGuard = { el: null, handler: null, realPtr: null, observer: null, lastFadeAt: 0, lastRealAt: 0 };
+
+  function staleGuardIsBar(t) {
+    if (!t || !t.classList) return false;
+    if (t.classList.contains('player-bottom') || t.classList.contains('player-topbar')) return true;
+    try { return !!(t.closest && (t.closest('.player-bottom') || t.closest('.player-topbar'))); } catch (e) { return false; }
+  }
+
+  function installStalePointerGuard(el) {
+    removeStalePointerGuard();
+    if (!el) return;
+    staleGuard.el = el;
+    staleGuard.lastFadeAt = 0;
+    staleGuard.lastRealAt = Date.now(); // anything before install counts as "real"
+    staleGuard.handler = function (e) {
+      if (e.type !== 'mouseout' && e.type !== 'mouseleave') return;
+      if (!staleGuardIsBar(e.target)) return;
+      var now = Date.now();
+      if (staleGuard.lastFadeAt && now - staleGuard.lastFadeAt < 500 && staleGuard.lastRealAt < staleGuard.lastFadeAt) {
+        try { diagnostic('stale_mouseleave_swallowed', { target: String(e.target && e.target.className || '').slice(0, 60), dt: now - staleGuard.lastFadeAt }); } catch (err) { /* ignore */ }
+        try { e.stopImmediatePropagation(); e.stopPropagation(); } catch (err) { /* ignore */ }
+      }
+    };
+    try {
+      el.addEventListener('mouseout', staleGuard.handler, true);
+      el.addEventListener('mouseleave', staleGuard.handler, true);
+    } catch (e) { /* ignore */ }
+    staleGuard.observer = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        var m = muts[i];
+        if (m.attributeName !== 'class') continue;
+        var cls = m.target && m.target.className;
+        if (cls && String(cls).indexOf('player-fade-out') !== -1) staleGuard.lastFadeAt = Date.now();
+      }
+    });
+    try { staleGuard.observer.observe(el, { subtree: true, attributes: true, attributeFilter: ['class'] }); } catch (e) { staleGuard.observer = null; }
+    staleGuard.realPtr = function (e) { if (e && e.isTrusted) staleGuard.lastRealAt = Date.now(); };
+    try {
+      document.addEventListener('pointerdown', staleGuard.realPtr, true);
+      document.addEventListener('pointermove', staleGuard.realPtr, true);
+      document.addEventListener('mousedown', staleGuard.realPtr, true);
+      document.addEventListener('touchstart', staleGuard.realPtr, true);
+      document.addEventListener('mousemove', staleGuard.realPtr, true);
+    } catch (e) { /* ignore */ }
+  }
+
+  function removeStalePointerGuard() {
+    if (staleGuard.observer) { try { staleGuard.observer.disconnect(); } catch (e) { /* ignore */ } staleGuard.observer = null; }
+    if (staleGuard.el && staleGuard.handler) {
+      try {
+        staleGuard.el.removeEventListener('mouseout', staleGuard.handler, true);
+        staleGuard.el.removeEventListener('mouseleave', staleGuard.handler, true);
+      } catch (e) { /* ignore */ }
+    }
+    if (staleGuard.realPtr) {
+      try {
+        document.removeEventListener('pointerdown', staleGuard.realPtr, true);
+        document.removeEventListener('pointermove', staleGuard.realPtr, true);
+        document.removeEventListener('mousedown', staleGuard.realPtr, true);
+        document.removeEventListener('touchstart', staleGuard.realPtr, true);
+        document.removeEventListener('mousemove', staleGuard.realPtr, true);
+      } catch (e) { /* ignore */ }
+    }
+    staleGuard.el = null;
+    staleGuard.handler = null;
+    staleGuard.realPtr = null;
   }
 
   function enterFullscreen(el) {
