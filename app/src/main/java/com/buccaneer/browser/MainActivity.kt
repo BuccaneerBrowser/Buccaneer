@@ -62,6 +62,33 @@ private val TRANSPARENT_PIXEL_PNG_1X1: ByteArray by lazy {
     )
 }
 
+/**
+ * Synchronous image fetch for the hero-downscale intercept. Called from
+ * shouldInterceptRequest (Chromium IO thread, not the main thread), so a bounded
+ * blocking GET is acceptable. Returns (bytes, mimeType) or null on any failure —
+ * the caller then falls back to letting the original request proceed.
+ */
+private fun fetchImageBytes(url: String, timeoutMs: Long): Pair<ByteArray, String>? {
+    return try {
+        val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = timeoutMs.toInt()
+        conn.readTimeout = timeoutMs.toInt()
+        conn.requestMethod = "GET"
+        conn.instanceFollowRedirects = true
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0")
+        val code = conn.responseCode
+        if (code != 200) { conn.disconnect(); return null }
+        val ct = (conn.contentType ?: "image/jpeg").lowercase(Locale.US)
+        if (!ct.startsWith("image/")) { conn.disconnect(); return null }
+        val bytes = conn.inputStream.use { it.readBytes() }
+        conn.disconnect()
+        if (bytes.size < 1024) return null // too small to be a real image
+        bytes to ct
+    } catch (e: Throwable) {
+        null
+    }
+}
+
 /** evaluateJavascript() returns JSON text; turn a JSON string result into the plain string (null for null). */
 fun jsString(raw: String?): String? {
     if (raw == null || raw == "null" || raw.length > 1024 * 1024 || !JsonInputBudget.allows(raw)) return null
@@ -1083,6 +1110,89 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                         put("main", r.isForMainFrame)
                         put("method", r.method)
                     })
+                }
+            }
+            // Flixer trailer video: the show/movie detail page embeds a looping
+            // YouTube trailer in an iframe. The continuous per-frame decode+composite
+            // is a major GPU load that tips the PowerVR driver over (the
+            // KEGLReleaseRenderTarget crash). Intercept the YouTube embed request and
+            // return a blank page so the video never loads — no DOM reflow (unlike
+            // removing the iframe, which destabilizes the compositor), just no video.
+            // Gated on a guarded host so direct YouTube navigation is unaffected.
+            if (r != null && onImageGuardedPage) {
+                val host = r.url.host?.lowercase(Locale.US) ?: ""
+                val path = (r.url.path ?: "").lowercase(Locale.US)
+                if ((host == "youtube.com" || host.endsWith(".youtube.com")) && path.startsWith("/embed/")) {
+                    DiagnosticLog.record(this@MainActivity, "trailer_video_blocked", JSONObject().apply {
+                        put("url", DiagnosticLog.safeUrl(r.url.toString()))
+                    })
+                    return android.webkit.WebResourceResponse(
+                        "text/html", "utf-8",
+                        java.io.ByteArrayInputStream("<html><body style=\"margin:0;background:#000\"></body></html>".toByteArray())
+                    )
+                }
+            }
+            // Flixer hero downscale: the show/movie detail page loads a 4K TMDB
+            // backdrop (image.tmdb.org/t/p/original/..., 3840x2160, ~33MB GPU
+            // texture) displayed at ~945x540. That oversized texture is the single
+            // biggest GPU-memory waste on the page and a major driver of the
+            // PowerVR render-target churn that crashes under D-pad navigation
+            // (KEGLReleaseRenderTarget). Intercept the /t/p/original/ request and
+            // serve the w780 variant (~1.4MB) directly — no DOM or URL change, no
+            // allowlist interaction (we return the image ourselves, so the TMDB
+            // firewall below is bypassed for this request). On any fetch failure we
+            // fall through and let the original 4K request proceed (no regression).
+            if (r != null && onImageGuardedPage) {
+                val host = r.url.host?.lowercase(Locale.US) ?: ""
+                val path = r.url.path ?: ""
+                if ((host == "image.tmdb.org" || host.endsWith(".tmdb.org")) && path.contains("/t/p/original/")) {
+                    // Only downscale images the firewall already allows (in the
+                    // allowlist). The hero is allowlisted when requested (that's why
+                    // it displays today), so this fires for it. Off-screen images the
+                    // firewall blocks are left alone (still get the 1x1 pixel).
+                    if (tmdbAllowlist.contains(r.url.toString())) {
+                        val smallUrl = r.url.toString().replace("/t/p/original/", "/t/p/w780/")
+                        val fetched = fetchImageBytes(smallUrl, 6000L)
+                        if (fetched != null) {
+                            DiagnosticLog.record(this@MainActivity, "hero_downscaled", JSONObject().apply {
+                                put("url", DiagnosticLog.safeUrl(r.url.toString()))
+                                put("small", DiagnosticLog.safeUrl(smallUrl))
+                                put("bytes", fetched.first.size)
+                            })
+                            return android.webkit.WebResourceResponse(
+                                fetched.second, "utf-8", java.io.ByteArrayInputStream(fetched.first)
+                            )
+                        }
+                        // fetch failed: fall through to the firewall (allows the 4K original)
+                    }
+                }
+            }
+            // Flixer episode-poster downscale: the detail page's episode list
+            // loads w500 TMDB posters (500x750, ~1.5MB GPU texture each)
+            // displayed at ~180x230. 18+ posters = ~27MB GPU memory, which
+            // evicts the hero's texture (raster loss / black hero). Scrolling
+            // the episode list loads them all and accelerates the black.
+            // Intercept /t/p/w500/ and serve w185 (~0.18MB) instead — 87%
+            // GPU-memory reduction with no visible quality loss at 180px.
+            if (r != null && onImageGuardedPage) {
+                val host = r.url.host?.lowercase(Locale.US) ?: ""
+                val path = r.url.path ?: ""
+                if ((host == "image.tmdb.org" || host.endsWith(".tmdb.org")) && path.contains("/t/p/w500/")) {
+                    if (tmdbAllowlist.contains(r.url.toString())) {
+                        val smallUrl = r.url.toString().replace("/t/p/w500/", "/t/p/w185/")
+                        val fetched = fetchImageBytes(smallUrl, 6000L)
+                        if (fetched != null) {
+                            DiagnosticLog.record(this@MainActivity, "poster_downscaled", JSONObject().apply {
+                                put("url", DiagnosticLog.safeUrl(r.url.toString()))
+                                put("small", DiagnosticLog.safeUrl(smallUrl))
+                                put("bytes", fetched.first.size)
+                            })
+                            return android.webkit.WebResourceResponse(
+                                fetched.second, "utf-8", java.io.ByteArrayInputStream(fetched.first)
+                            )
+                        }
+                        // fetch failed: fall through to the firewall
+                    }
                 }
             }
             // TMDB image firewall: on a guarded poster-grid host, only allow

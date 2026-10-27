@@ -23,6 +23,27 @@ subsystem over its threshold even when the fix itself is locally correct.
 
 Not yet committed. This is the current state of the device build.
 
+### fmhy.net/video dead to taps for ~7 s, then snaps to the top — popup_guard scan cost
+- **Fix:** `killOverlays()` (popup_guard.js, every non-flixer page) walked every
+  `div, span, a, iframe` and, for each one, forced layout (`getBoundingClientRect`) and
+  copied its full `textContent` (log-only; for nested containers that is the whole page text
+  once per nesting level), then re-ran after every DOM change (300 ms debounce). On fmhy's
+  ~1000-link page on the Fire TV that kept the page's main thread busy for seconds while
+  loading/hydrating, so taps hit a stale layout and scroll state until it caught up.
+  Now: (1) static elements are skipped before the costly calls (no rule can match them: every
+  rule needs a floating element, covers-video also accepts `relative`); (2) element text is
+  read only when an event is actually logged (same 60-char value); (3) the debounce is
+  `max(300 ms, 10 x last scan time)`, capped at 4 s, so heavy pages back off by themselves and
+  light pages keep the 300 ms response.
+- **Broke / risked:** none observed in a mock-DOM comparison against the previous script
+  (identical kills and identical diagnostic events for ad iframe, high-z, full-viewport
+  catcher, covers-video, spared modal, sticky/static, pointer-events:none). Not yet verified on
+  device. A page that injects an ad overlay while a scan is slow is now cleaned up up to 4 s
+  later instead of ~0.3 s later.
+- **GPU:** neutral/removes (less DOM work; no new style or layout writes).
+- **Status:** `armed` — needs a run of fmhy.net/video on the Fire TV.
+- **Files:** `popup_guard.js` (hash re-pinned in `tests/protected-fixes.json`).
+
 ### Piped redirect — ABANDONED (no code written)
 - **Fix:** n/a — prototype was approved and mapped (`MainActivity.kt` navigation
   choke points + settings mechanism) but never coded.

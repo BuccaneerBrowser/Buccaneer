@@ -13,6 +13,34 @@ Gate: `python3 tests/check-protected-fixes.py` must PASS before build.
 
 ---
 
+## CRASH CAPTURED 2026-10-27 01:41:15Z (episode-list scroll, full context)
+- Reproduced by Mommy: scrolling the episode list on a Flixer detail page.
+- **Crash:** SIGSEGV, code 1 (SEGV_MAPERR), fault addr 0x4, oom:0,
+  **thread Chrome_InProcGp** (the WebView's in-process GPU process — NEW: prior
+  crashes were HWUI RenderThread via glDrawArrays). Entry this time:
+  `glBindFramebuffer+372` -> `KEGLReleaseRenderTarget+77` (libIMGegl.so).
+  Same driver use-after-free signature (KEGLReleaseRenderTarget+77, fault 0x4),
+  different entry point: framebuffer bind, not draw.
+- **Sequence (UTC, session 7a232bc8, /tmp/bucc_diag10.jsonl 9649 lines):**
+  - 01:40:18 user_navigation flixer.gd home; firewall active.
+  - 01:40:26-27 home posters + hero downscaled (native intercepts working).
+  - 01:40:38 `trailer_video_blocked` — YouTube embed intercepted (CONFIRMED active).
+  - ~01:40:45-50 detail page loads (6 more poster_downscaled at 01:40:50).
+  - 01:41:00 tap (388,192) -> tap_stack count 25, top = detail overlay
+    (`space-y-6 bg-black/40 backdrop-blur-md`).
+  - 01:41:07-13: **170x KEYCODE_DPAD_DOWN** (handler browse) = scrolling the
+    episode list; `tmdb_allowlist_sync` count climbs 14 -> 15 (episode posters
+    entering the pre-load band, getting live textures).
+  - 01:41:13.683 last JSONL event; **01:41:15.745 SIGSEGV** (2.06 s gap).
+- **Data-backed conclusion:** crash correlates with episode-list scrolling that
+  brings new episode posters into the allowlist (live GPU textures growing)
+  while the GPU process is mid-composite. The trailer intercept, hero/poster
+  downscale, and image guard were ALL active and did not prevent it.
+- **Next:** instrumented build (compositor_proxy in flixer_image_guard.js,
+  zero behavior change) built + gate PASS. Install (with permission) ->
+  reproduce episode-list scroll -> read last compositor_proxy sample
+  (realImg/emptyImg/fixedImgs/clippedImgs) at death.
+
 ## NEW SESSION 2026-10-26 (post-handoff; DOM re-verified, v1-v4 tested)
 - DOM RE-VERIFIED (differs from handoff): the blacking hero (object-[50%_35%],
   945x540, src HzytiKM3riCMcbVYBJhlB.jpg) is in the GIANT PAGE DIV, NOT in the
@@ -552,6 +580,11 @@ The black-screen GPU compositing failure is the target. Crash is already fixed.
 - Layer splitting via will-change (text renders, images don't) — #14
 - Hero image block (hero texture is NOT the trigger) — #18
 - Cache-buster re-request block (NOT the trigger; required for render) — #20
+- **`display:none` on the browse grid** (621-img / 32-row container behind the detail overlay)
+  to cut static compositor workload — **2026-10-26, FAILED: crashed 18:29:46** (same
+  KEGLReleaseRenderTarget). Hiding the browse grid does NOT stop the crash-on-episode-click.
+  The episode list (what the user scrolls) is a separate workload — see
+  `docs/FLIXER_MASTER_HANDOFF_2026-10-26.md`.
 - Software rendering (user: NEVER suggest)
 - Full-DOM walks (user constraint)
 - Rasterization / hardware-accel changes before isolating the workload (GPT constraint)

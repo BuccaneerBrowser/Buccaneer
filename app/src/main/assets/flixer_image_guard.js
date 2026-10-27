@@ -71,6 +71,7 @@
     var io = null;
     var syncing = false;
     var virtualized = 0;      // count of posters whose src was stripped
+    var lastCpLog = 0;        // compositor_proxy log throttle (>=2s between logs)
 
     function isTmdbImg(img) {
       if (!img || img.tagName !== 'IMG') { return false; }
@@ -80,6 +81,15 @@
       try { h = new URL(src, location.href).host.toLowerCase(); }
       catch (e) { return false; }
       return h === 'image.tmdb.org' || h.indexOf('.tmdb.org') === h.length - 9;
+    }
+
+    // compositor_proxy: a TMDB poster is either live (has a src, decoded GPU
+    // texture) or virtualized (src stripped by the guard, original kept in
+    // __flixerSrc). Used to correlate the PowerVR crash with live texture count.
+    function isTmdbPoster(im) {
+      if (!im || im.tagName !== 'IMG') { return false; }
+      if (im.__flixerSrc) { return true; }   // already virtualized by the guard
+      return isTmdbImg(im);
     }
 
     // Virtualization: strip src from off-screen TMDB posters so the browser
@@ -184,6 +194,32 @@
           if (!inViewport(img2, 200)) {
             img2.__flixerBlocked = true;
           }
+        }
+        // compositor_proxy: every >=2s, log how many TMDB posters still hold a
+        // live src (decoded GPU textures) vs virtualized, plus how many card
+        // containers are position:fixed / overflow:hidden (compositor clipping
+        // layers). The last sample before a silent native death shows what was
+        // actually live at crash time.
+        var now = Date.now();
+        if (now - lastCpLog >= 2000) {
+          lastCpLog = now;
+          var realImg = 0, emptyImg = 0, fixedImgs = 0, clippedImgs = 0;
+          for (var k = 0; k < imgs.length; k++) {
+            var im = imgs[k];
+            if (!isTmdbPoster(im)) { continue; }
+            if (im.__flixerSrc) { emptyImg++; } else { realImg++; }
+            var p = im.parentElement;
+            if (p && p.className && typeof p.className === 'string') {
+              if (p.className.indexOf('fixed') !== -1) { fixedImgs++; }
+              if (p.className.indexOf('overflow-hidden') !== -1) { clippedImgs++; }
+            }
+          }
+          try {
+            window.Buccaneer.diagnosticEvent('compositor_proxy', JSON.stringify({
+              realImg: realImg, emptyImg: emptyImg,
+              fixedImgs: fixedImgs, clippedImgs: clippedImgs
+            }));
+          } catch (e) { /* bridge not ready */ }
         }
         // Most-recently-visible first: DOM order is a good proxy (newer posters
         // are appended later). Cap to MAX.

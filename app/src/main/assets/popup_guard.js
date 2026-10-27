@@ -248,6 +248,15 @@
   //    an element that (a) covers most of the video, (b) is positioned above it in the
   //    stacking order, and (c) is NOT the video, its control bar, or a real control.
   //    That names the ad layer directly rather than guessing from style thresholds.
+  // Log-only text of an element, read only when an event is actually logged. Same value as the
+  // old eager variable (lowercased, whitespace-collapsed, first 60 chars) without copying the
+  // whole text of every element on every scan.
+  function elText(el) {
+    try {
+      return (el.textContent || '').substring(0, 400).toLowerCase().replace(/\s+/g, ' ').trim().substring(0, 60);
+    } catch (e) { return ''; }
+  }
+
   function killOverlays() {
     if (!enabled()) return;
     // Find the video we care about: the largest visible <video> in this frame.
@@ -312,15 +321,19 @@
       try { s = window.getComputedStyle(el); } catch (e) { continue; }
       if (s.pointerEvents === 'none') continue;
       if (s.display === 'none' || s.visibility === 'hidden') continue;
+      var floating = s.position === 'fixed' || s.position === 'absolute';
+      // PERFORMANCE (fmhy.net/video: ~1000 links, ~10k elements; page dead to taps for ~7 s on
+      // the Fire TV): every rule below needs a floating element, except covers-video, which
+      // also accepts a position:relative one and needs a video. A static element can never be
+      // killed or logged, so stop before the two calls that are costly on a big page
+      // (getBoundingClientRect forces layout; the old eager textContent copied the full text of
+      // every container, which for nested containers is the page text once per nesting level).
+      if (!floating && !(haveVideo && vr && s.position === 'relative')) continue;
       var r;
       try { r = el.getBoundingClientRect(); } catch (e) { continue; }
-      var floating = s.position === 'fixed' || s.position === 'absolute';
       var z = parseInt(s.zIndex, 10);
       var hasZ = !isNaN(z);
       var area = r.width * r.height;
-      // Element text, kept for the reconnaissance log below.
-      var text = '';
-      try { text = (el.textContent || '').toLowerCase(); } catch (e) { /* ignore */ }
       // (a) is an ad overlay. Three signals:
       //     1. a floating iframe with a very high z-index and small size — an ad
       //        creative. Works with or without a video (home pages, pre-roll). The
@@ -393,7 +406,7 @@
                 z: s.zIndex,
                 x: Math.round(r.left), y: Math.round(r.top),
                 w: Math.round(r.width), h: Math.round(r.height),
-                text: text.replace(/\s+/g, ' ').trim().substring(0, 60)
+                text: elText(el)
               }));
             }
           } catch (e) { /* ignore */ }
@@ -424,7 +437,7 @@
             pos: s.position,
             z: s.zIndex,
             reason: isIframeAd ? 'floating_iframe' : (isHighZAd ? 'high_z_ad' : (coversViewport ? 'viewport_catcher' : 'covers_video')),
-            text: text.replace(/\s+/g, ' ').trim().substring(0, 60)
+            text: elText(el)
           }));
         }
       } catch (e) { /* ignore */ }
@@ -550,19 +563,33 @@
     killCatchers();
     setInterval(killCatchers, 5000);
   } else {
-    killOverlays();
+    // A scan on a big page is not free on this hardware, and a page that is still loading or
+    // hydrating mutates constantly, so a fixed 300 ms debounce re-ran the scan back to back and
+    // left the page's main thread no time for taps (fmhy.net/video: dead for ~7 s, then the
+    // page snapped back to the top). Time each scan and wait at least ten times as long before
+    // the next one (at most ~9% of the main thread, never more than 4 s), so a light page keeps
+    // the 300 ms response and a heavy one backs off by itself.
+    var lastScanMs = 0;
+    function nowMs() {
+      try { return window.performance.now(); } catch (e) { return Date.now(); }
+    }
+    function timedScan() {
+      var t0 = nowMs();
+      try { killOverlays(); } finally { lastScanMs = nowMs() - t0; }
+    }
+    timedScan();
     var scanTimer = 0;
     function scheduleScan() {
       if (scanTimer) return;
       scanTimer = setTimeout(function () {
         scanTimer = 0;
-        killOverlays();
-      }, 300);
+        timedScan();
+      }, Math.min(4000, Math.max(300, lastScanMs * 10)));
     }
     try {
       var mo = new MutationObserver(scheduleScan);
       mo.observe(document.documentElement || document, { childList: true, subtree: true });
     } catch (e) { /* old WebView without MutationObserver: fall back to the interval */ }
-    setInterval(killOverlays, 5000);
+    setInterval(timedScan, 5000);
   }
 })();
