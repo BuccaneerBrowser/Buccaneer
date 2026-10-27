@@ -1,0 +1,7 @@
+.gradle/
+**/build/
+local.properties
+*.keystore
+*.jks
+# Local working docs (contain machine-specific paths/IPs) — never push
+docs/audit-2026-10-23.md

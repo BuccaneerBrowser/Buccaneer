@@ -1,0 +1,43 @@
+{
+  "apk": "BuccaneerClaude-1.9.3-fresh-install.apk",
+  "bytes": 1228647,
+  "sha256": "71d5fd2b9002eb71283e2ca6d1802e77372b186a01514ffea6702ec733ec03ae",
+  "versionCode": 12,
+  "versionName": "1.9.3",
+  "minSdk": 22,
+  "compileSdk": 34,
+  "targetSdk": 33,
+  "webkit": "1.9.0",
+  "debuggable": false,
+  "sourceFilesFrozen": 42,
+  "runtimeUnchangedSinceFinalBuild": true,
+  "packagedScriptBytesMatch": {
+    "flixer_image_guard.js": true,
+    "page_helpers.js": true,
+    "popup_guard.js": true,
+    "fmhy_theme.js": true,
+    "tv_ui.js": true,
+    "seek_click.js": true
+  },
+  "androidTestTotals": {
+    "tests": 88,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "chromiumAssertions": 84,
+  "unhandledLintIssues": 0,
+  "explicitLintExceptions": 9,
+  "nativeLibraries": [],
+  "unwaivedLintCounts": {
+    "ApplySharedPref": 4,
+    "OldTargetApi": 1,
+    "UnusedAttribute": 1,
+    "GradleDependency": 1,
+    "SetJavaScriptEnabled": 2
+  },
+  "unwaivedLintWarnings": 9,
+  "unwaivedLintErrors": 0,
+  "rawAuditProvenanceVerified": true,
+  "compilerNoticesRetained": 1
+}

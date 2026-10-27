@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- User requires the existing Fire TV compatibility behavior; a target migration is a separate tested change. -->
+    <issue id="OldTargetApi">
+        <ignore path="build.gradle.kts" />
+    </issue>
+    <!-- Preserve the established SDK-34/min-22 WebView library per user instruction; do not upgrade only to silence lint. -->
+    <issue id="GradleDependency">
+        <ignore regexp="A newer version of androidx.webkit:webkit than 1\.9\.0 is available" />
+    </issue>
+</lint>

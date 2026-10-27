@@ -1,0 +1,14 @@
+{
+  "scriptSha256": {
+    "flixer_image_guard.js": "147f8bcd54cdd92e3b0d63c25ded876efb329518e0f15db4360f87c89883e179",
+    "fmhy_theme.js": "6f10767f14524d23fabef756f6f4006184bb19e5972ca6ad07463f8021be4d73",
+    "page_helpers.js": "46af664e05b73eea3d23c6d8c14bb4d46eebfdeead7fcc31170155227aa1cf61",
+    "popup_guard.js": "9a3396113202130655ee5b444708e15d39afbc0abafc3b17af9003e456fb0823",
+    "seek_click.js": "419499f52c6ad72f5ca5b371df02a930ae6db7e44d52b0c1ff5311e1cb321222",
+    "tv_ui.js": "2c77ad908bb01610837fd2f9be8437722ac21c77320eaab40252145c05efc535"
+  },
+  "minSdk": 22,
+  "compileSdk": 34,
+  "targetSdk": 33,
+  "webkit": "1.9.0"
+}

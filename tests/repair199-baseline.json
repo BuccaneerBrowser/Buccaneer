@@ -1,0 +1,14 @@
+{
+  "sourceApkSha256": "8c3cb3a66c7f8b9791dcf5ff53ced6f8b64da320cee5bf44911eafdcaac65f49",
+  "helperSha256": "f918b00541ec0b541074d1c9d832d4f6e74f552c993d02001a6dc3919f0f18bf",
+  "qualityBefore": "pref.changed=pref.present && (player.__fbPreferenceKey!==undefined ? player.__fbPreferenceKey!==key : pref.revision>0);",
+  "qualityAfter": "pref.changed=pref.present && (player.__fbPreferenceKey!==undefined ? player.__fbPreferenceKey!==key : (pref.revision>0 || player.__fbManualQuality!==true));",
+  "exactAssets": {
+    "popup_guard.js": "9a3396113202130655ee5b444708e15d39afbc0abafc3b17af9003e456fb0823",
+    "flixer_image_guard.js": "147f8bcd54cdd92e3b0d63c25ded876efb329518e0f15db4360f87c89883e179",
+    "fmhy_theme.js": "6f10767f14524d23fabef756f6f4006184bb19e5972ca6ad07463f8021be4d73"
+  },
+  "cinejoySha256": "8439eec997e74d3712382aa01e7f8a61beab9b3a8b89bb823c7b17369c1a45b4",
+  "cinejoyBefore": "      // A fresh default does not erase an existing explicit website choice.\n      if (!owned && pref.revision === 0 && hasQuality && typeof settings.quality === 'number' && settings.quality > 0)\n        return 'manual';",
+  "cinejoyAfter": "      // Existing storage alone cannot establish a deliberate user choice in this session.\n      // Seed the app preference once; later site changes under the same key still win."
+}

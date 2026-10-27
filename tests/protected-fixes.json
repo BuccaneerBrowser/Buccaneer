@@ -1,0 +1,16 @@
+[
+  {
+    "path": "app/src/main/assets/flixer_image_guard.js",
+    "sha256": "b996a127928e35def85785124950db4203deffdb444a14e5f3902b1ebdad5ebd"
+  },
+  {
+    "path": "app/src/main/assets/popup_guard.js",
+    "sha256": "2eb794f3f063411f9ca048b66229741c89df7b98a7694956f9500502878e7d62"
+  },
+  {
+    "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
+    "after": "    private fun applyDarkMode()",
+    "before": "    private fun toggleDark()",
+    "sha256": "1f1b2c3d186b636281cedd55b7f69d606ebfa21e543944445e6e836a0231af90"
+  }
+]

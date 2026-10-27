@@ -1,0 +1,23 @@
+from pathlib import Path
+import hashlib, json
+root = Path(__file__).resolve().parent.parent
+for check in json.loads((root / 'tests/protected-fixes.json').read_text()):
+    data = (root / check['path']).read_bytes()
+    if check['path'].endswith('page_helpers.js'):
+        for edit in reversed(json.loads((root / 'tests/approved-passive-changes-1.9.json').read_text())):
+            assert edit['new'].encode() in data, 'Approved passive change drifted'
+            data = data.replace(edit['new'].encode(), edit['old'].encode(), 1)
+        data = data.replace(b"i < (hlsInstances || []).length", b"i < hlsInstances.length")
+        data = data.replace(b"if (best < 0 || ht > bestH)", b"if (best < 0 || ht < bestH)")
+        data = data.replace(b"    for (var pi = 0; pi < playing.length; pi++) {\n      if (isRealPlayer(playing[pi])) { bridgeCall('playbackActive'); break; }\n    }\n", b"")
+    if check['path'].endswith('MainActivity.kt'):
+        # 1.9.2 removes an unused private argument; the two calls keep identical behavior.
+        assert data.count(b'injectDarkMode(view)') == 2, 'Unexpected dark cleanup call drift'
+        data = data.replace(b'injectDarkMode(view)', b'injectDarkMode(view, url)')
+    if 'after' in check or 'before' in check:
+        text = data.decode()
+        if 'after' in check: text = text[text.index(check['after']):]
+        if 'before' in check: text = text[:text.index(check['before'])]
+        data = text.encode()
+    assert hashlib.sha256(data).hexdigest() == check['sha256'], check['path']
+print('PASS: original Flixer intro/image guard, Popup Guard/Coreflix click workarounds, documented passive API normalization, native Flixer guards, and dark mode preserved.')
