@@ -374,11 +374,11 @@
   // the poster-grid site keeps the native path: its document returns early below, so none of this is
   // installed there.
 
-  var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false, savedScroll: null, scrollGuard: null };
+  var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false, savedScroll: null, scrollGuard: null, offsetTimer: 0, offsetEl: null, offsetTicks: 0, entryClasses: null, naturalRect: null, hostEntryClasses: null, hostNaturalRect: null, hostPosSaved: null, hostZSaved: null, hostPosWasStatic: false };
   var __nativeFsFns = {};
 
   function cssFsSave(el) {
-    var props = ['position', 'left', 'top', 'right', 'bottom', 'width', 'height', 'margin', 'z-index', 'background', 'object-fit'];
+    var props = ['position', 'left', 'top', 'right', 'bottom', 'width', 'height', 'margin', 'z-index', 'background', 'object-fit', 'transform'];
     var s = {};
     for (var i = 0; i < props.length; i++) s[props[i]] = { v: el.style.getPropertyValue(props[i]), p: el.style.getPropertyPriority(props[i]) };
     return s;
@@ -437,10 +437,61 @@
     return el;
   }
 
+  // Shadow-root offset fix: on this WebView a position:fixed element that lives INSIDE
+  // a shadow root (getRootNode() is a ShadowRoot, not the document) anchors to the shadow
+  // host's in-flow position instead of the viewport origin (computed style says
+  // left:0/top:0 but getBoundingClientRect() returns the host's offset). Compensate with
+  // a translate so the fullscreen element covers the viewport. Scoped to elements inside
+  // a shadow root (not top-doc elements) and non-iframe elements; a bounded timer
+  // re-measures a few times to cover player layout settling.
+  function cssFsFixOffset(el) {
+    if (!el || !cssFs.active) return false;
+    if (el.tagName === 'IFRAME') return false;
+    var rn = el.getRootNode ? el.getRootNode() : null;
+    if (!rn || rn === document) return false; // only inside a shadow root (not top doc)
+    var r; try { r = el.getBoundingClientRect(); } catch (e) { return false; }
+    var dx = -Math.round(r.x), dy = -Math.round(r.y);
+    if (dx === 0 && dy === 0) return false;
+    el.style.setProperty('transform', 'translate(' + dx + 'px,' + dy + 'px)', 'important');
+    return true;
+  }
+
   function cssFsEnter(el) {
     if (!el || cssFs.active) return Promise.resolve();
     unpinPlayerFrame(); // restore original positioning so cssFsSave captures it
     cssFs.saved = cssFsSave(el);
+    cssFs.entryClasses = (el.className && typeof el.className === 'string') ? el.className.split(/\s+/).filter(Boolean) : [];
+    cssFs.naturalRect = (function () { var r; try { r = el.getBoundingClientRect(); } catch (e) { return null; } return { w: r.width, h: r.height }; })();
+    // If the element is inside a shadow root, also capture the shadow host's entry state
+    // (its classes + natural size) so the exit re-check can guard per-target.
+    var __fsRn = el.getRootNode ? el.getRootNode() : null;
+    var __fsHost = (__fsRn && __fsRn.host && __fsRn.host !== el) ? __fsRn.host : null;
+    if (__fsHost) {
+      cssFs.hostEntryClasses = (__fsHost.className && typeof __fsHost.className === 'string') ? __fsHost.className.split(/\s+/).filter(Boolean) : [];
+      cssFs.hostNaturalRect = (function () { var r; try { r = __fsHost.getBoundingClientRect(); } catch (e) { return null; } return { w: r.width, h: r.height }; })();
+    } else {
+      cssFs.hostEntryClasses = null; cssFs.hostNaturalRect = null;
+    }
+    // Stacking-context fix: if the element is inside a shadow root, the shadow host's
+    // z-index determines the shadow subtree's paint level in the root stacking context.
+    // If the host is static/z:auto, a top-doc element with a high z-index (e.g. a menu bar)
+    // paints on top of the fullscreen video. Lift the host to relative + z-index max so the
+    // shadow subtree (video included) paints above all top-doc elements. Save the host's
+    // inline position + z-index (value+priority) so we restore exactly on exit.
+    // Note: only the innermost shadow host is lifted (getRootNode returns the innermost
+    // root); nested shadow roots would need each host lifted (single-root case verified).
+    if (__fsHost) {
+      try {
+        cssFs.hostPosSaved = { v: __fsHost.style.getPropertyValue('position'), p: __fsHost.style.getPropertyPriority('position') };
+        cssFs.hostZSaved = { v: __fsHost.style.getPropertyValue('z-index'), p: __fsHost.style.getPropertyPriority('z-index') };
+        var __hcs = getComputedStyle(__fsHost);
+        cssFs.hostPosWasStatic = (__hcs.position === 'static');
+        if (cssFs.hostPosWasStatic) __fsHost.style.setProperty('position', 'relative', 'important');
+        __fsHost.style.setProperty('z-index', '2147483647', 'important');
+      } catch (e) { /* ignore */ }
+    } else {
+      cssFs.hostPosSaved = null; cssFs.hostZSaved = null; cssFs.hostPosWasStatic = false;
+    }
     var st = el.style;
     st.setProperty('position', 'fixed', 'important');
     st.setProperty('left', '0', 'important');
@@ -460,6 +511,25 @@
     if (window === window.top) cssFsNotifyApp(true); else cssFsPostParent(true);
     installFsResumeGuard(el);
     installStalePointerGuard(el);
+    if (cssFsFixOffset(el)) {
+      cssFs.offsetEl = el; cssFs.offsetTicks = 5;
+      cssFs.offsetTimer = setInterval(function () {
+        if (!cssFs.active) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; return; }
+        var oel = cssFs.offsetEl;
+        if (!oel) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; return; }
+        oel.style.removeProperty('transform');
+        void oel.offsetWidth;
+        var r; try { r = oel.getBoundingClientRect(); } catch (e) { return; }
+        var dx = -Math.round(r.x), dy = -Math.round(r.y);
+        if (dx !== 0 || dy !== 0) {
+          oel.style.setProperty('transform', 'translate(' + dx + 'px,' + dy + 'px)', 'important');
+        }
+        // If the offset cleared (dx===0 && dy===0), leave the transform removed — do NOT
+        // re-apply the previous compensating translate (it would shift the element off-center).
+        // The original transform (if any) is saved in cssFs.saved and restored at exit.
+        if (--cssFs.offsetTicks <= 0) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; }
+      }, 2000);
+    }
     return Promise.resolve();
   }
 
@@ -498,15 +568,82 @@
     var el = cssFs.el;
     cssFs.active = false;
     cssFs.el = null;
+    if (cssFs.offsetTimer) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; }
+    cssFs.offsetEl = null; cssFs.offsetTicks = 0;
     cssFsRemoveScrollGuard();
     if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
     cssFs.wasPlaying = false;
     try { removeStalePointerGuard(); } catch (e) { /* ignore */ }
     try { if (el) cssFsRestore(el, cssFs.saved); } catch (e) { /* ignore */ }
     cssFs.saved = null;
+    // Restore the shadow host's position + z-index (if it was lifted during enter).
+    if (el) {
+      try {
+        var __exRn = el.getRootNode ? el.getRootNode() : null;
+        var __exHost = (__exRn && __exRn.host && __exRn.host !== el) ? __exRn.host : null;
+        if (__exHost) {
+          if (cssFs.hostPosSaved) {
+            if (cssFs.hostPosSaved.v) {
+              __exHost.style.setProperty('position', cssFs.hostPosSaved.v, cssFs.hostPosSaved.p);
+            } else {
+              __exHost.style.removeProperty('position');
+            }
+          }
+          if (cssFs.hostZSaved) {
+            if (cssFs.hostZSaved.v) {
+              __exHost.style.setProperty('z-index', cssFs.hostZSaved.v, cssFs.hostZSaved.p);
+            } else {
+              __exHost.style.removeProperty('z-index');
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+    cssFs.hostPosSaved = null; cssFs.hostZSaved = null; cssFs.hostPosWasStatic = false;
     pinPlayerFrame(); // re-pin the player iframe now that CSS fullscreen is gone
     try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
     if (window === window.top) cssFsNotifyApp(false); else cssFsPostParent(false);
+    // After a fullscreen cycle a stale "fullscreen" class can persist on the player
+    // (or its shadow host) and collapse the layout to zero height (black screen with
+    // audio). Re-check a few times and remove any session-added fullscreen class if the
+    // layout is collapsed. Structure-scoped: only classes matching /fullscreen/i that
+    // were NOT present at entry (i.e. added during the session) are removed. Checks both
+    // the fullscreen element and its shadow host (if any), with per-target entry-class
+    // and natural-size guards.
+    (function () {
+      var exitEl = el;
+      function checkCollapse() {
+        try {
+          if (!exitEl || !exitEl.isConnected) return;
+          var targets = [exitEl];
+          var rn = exitEl.getRootNode ? exitEl.getRootNode() : null;
+          if (rn && rn.host && rn.host !== exitEl) targets.push(rn.host);
+          for (var t = 0; t < targets.length; t++) {
+            var target = targets[t];
+            var isHost = (t === 1);
+            var entryClasses = isHost ? (cssFs.hostEntryClasses || []) : (cssFs.entryClasses || []);
+            var natRect = isHost ? cssFs.hostNaturalRect : cssFs.naturalRect;
+            var natH = (natRect && natRect.h) ? natRect.h : 0;
+            var r; try { r = target.getBoundingClientRect(); } catch (e) { continue; }
+            var collapsed = r.height < Math.max(10, 0.25 * natH) && r.width > 50;
+            if (collapsed && target.className && typeof target.className === 'string') {
+              var entrySet = {};
+              for (var i = 0; i < entryClasses.length; i++) entrySet[entryClasses[i]] = 1;
+              var classes = target.className.split(/\s+/);
+              for (var j = 0; j < classes.length; j++) {
+                if (classes[j] && /fullscreen/i.test(classes[j]) && !entrySet[classes[j]]) {
+                  target.classList.remove(classes[j]);
+                }
+              }
+              void target.offsetWidth;
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+      setTimeout(checkCollapse, 250);
+      setTimeout(checkCollapse, 600);
+      setTimeout(checkCollapse, 1200);
+    })();
   }
 
   // ------------------------------------------------------------------ player frame pinning
