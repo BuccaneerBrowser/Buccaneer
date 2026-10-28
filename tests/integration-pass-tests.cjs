@@ -12,7 +12,7 @@ function makePlayer(){
  const fr={tagName:'IFRAME',contentDocument:child,offsetWidth:404,offsetHeight:304,clientLeft:2,clientTop:2,getBoundingClientRect:()=>rect};
  const cw={innerWidth:400,innerHeight:300,getComputedStyle:w.getComputedStyle,frameElement:fr};child.defaultView=cw;v.ownerDocument=child;
  const doc={getElementsByTagName:k=>k==='iframe'?[fr]:[],activeElement:fr,documentElement:{contains:el=>el===fr},elementFromPoint:()=>fr,addEventListener:()=>{},removeEventListener:()=>{}};fr.ownerDocument=doc;doc.defaultView=w;
- const c={window:w,document:doc,Date};vm.createContext(c);vm.runInContext(source,c);return {w,v,fr,doc,cw};
+ const c={window:w,document:doc,Date,MutationObserver:class{constructor(cb){this._cb=cb;}observe(){}disconnect(){}takeRecords(){return[];}}};vm.createContext(c);vm.runInContext(source,c);return {w,v,fr,doc,cw};
 }
 check('focused same-origin iframe exposes its reachable movie instead of becoming opaque',()=>{let {w}=makePlayer();assert.equal(JSON.parse(w.__fb.state()).f,1);});
 check('nested reachable movie center is mapped into top-page coordinates',()=>{let {w,doc}=makePlayer();doc.activeElement=null;let s=JSON.parse(w.__fb.frameCenter());assert(Math.abs(s.x-672/1280)<.001);assert(Math.abs(s.y-232/720)<.001);});
