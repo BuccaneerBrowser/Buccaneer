@@ -73,6 +73,22 @@
     var virtualized = 0;      // count of posters whose src was stripped
     var lastCpLog = 0;        // compositor_proxy log throttle (>=2s between logs)
 
+    // ---- Card virtualization (PowerVR crash fix, detail/episode page) --------
+    // The detail page (episode list) composites many card containers
+    // (overflow:hidden clipping layers). Each composited card is a GPU render
+    // target; on the Fire TV's PowerVR GPU, too many render targets crash the
+    // renderer (SIGSEGV in KEGLReleaseRenderTarget during glDrawArrays). We
+    // virtualize off-screen cards (content-visibility: hidden +
+    // contain-intrinsic-size) so the browser skips rendering them, cutting the
+    // number of live composited layers. content-visibility (not display:none)
+    // keeps the box in layout via its intrinsic size, so the card's rect stays
+    // valid and restore-on-scroll works without reflow.
+    var CARD_MARGIN = 600;   // pre-load band around the viewport (px)
+    var CARD_BATCH = 12;     // max cards to restore per sync (avoid a burst)
+    var cardVirtualized = 0; // count of cards currently virtualized
+    var cardCache = null;    // cached list of card containers
+    var cardCacheTime = 0;   // when the card cache was built (ms)
+
     function isTmdbImg(img) {
       if (!img || img.tagName !== 'IMG') { return false; }
       var src = img.currentSrc || img.src || '';
@@ -153,6 +169,79 @@
       } catch (e) { /* never throw */ }
     }
 
+    // Find the card containers: overflow:hidden elements that sit in a list
+    // (3+ same-tag siblings). These are the composited clipping layers that
+    // trigger the PowerVR crash. Cached for 5s so we don't re-scan every sync.
+    function findCards() {
+      var now = Date.now();
+      if (cardCache && now - cardCacheTime < 5000) { return cardCache; }
+      var cards = [];
+      try {
+        var all = document.querySelectorAll('div');
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i];
+          var cs = window.getComputedStyle(el);
+          if (cs.overflow !== 'hidden' && cs.overflow !== 'clip') { continue; }
+          var parent = el.parentElement;
+          if (!parent) { continue; }
+          var sameTag = 0;
+          for (var j = 0; j < parent.children.length; j++) {
+            if (parent.children[j].tagName === el.tagName) { sameTag++; }
+          }
+          if (sameTag < 3) { continue; }
+          cards.push(el);
+        }
+      } catch (e) { /* never throw */ }
+      cardCache = cards;
+      cardCacheTime = now;
+      return cards;
+    }
+
+    function cardInViewport(el, margin) {
+      try {
+        var m = margin || 0;
+        var r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) { return false; }
+        var vh = (window.innerHeight || 0) + m;
+        var vw = (window.innerWidth || 0) + m;
+        return r.bottom > -m && r.right > -m && r.top < vh && r.left < vw;
+      } catch (e) { return false; }
+    }
+
+    // Virtualize off-screen cards (content-visibility: hidden) and restore the
+    // ones that have scrolled into the pre-load band. Restores are batched
+    // (CARD_BATCH per sync) so we never create a burst of render targets at
+    // once — a burst is what trips the PowerVR driver race.
+    function virtualizeCards() {
+      try {
+        var cards = findCards();
+        if (cards.length === 0) { return; }
+        var restored = 0;
+        for (var i = 0; i < cards.length; i++) {
+          var el = cards[i];
+          var isVirt = el.__cardVirtualized;
+          var inView = cardInViewport(el, CARD_MARGIN);
+          if (isVirt && inView) {
+            // Restore: let the browser render it again.
+            el.style.setProperty('content-visibility', '');
+            el.style.setProperty('contain-intrinsic-size', '');
+            el.__cardVirtualized = false;
+            cardVirtualized--;
+            restored++;
+            if (restored >= CARD_BATCH) { break; } // avoid a burst
+          } else if (!isVirt && !inView) {
+            // Virtualize: record the size, then hide the content.
+            var r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) { continue; }
+            el.style.setProperty('contain-intrinsic-size', r.width + 'px ' + r.height + 'px');
+            el.style.setProperty('content-visibility', 'hidden');
+            el.__cardVirtualized = true;
+            cardVirtualized++;
+          }
+        }
+      } catch (e) { /* never throw */ }
+    }
+
     function sync() {
       if (syncing) { return; }
       syncing = true;
@@ -162,6 +251,9 @@
         // have scrolled into the pre-load band. Must run before the allowlist is
         // rebuilt so restored images carry their real src when we read them.
         virtualize();
+        // Then virtualize off-screen cards (content-visibility: hidden) to cut
+        // the number of live composited layers — the PowerVR crash trigger.
+        virtualizeCards();
         // Rebuild the list from the live DOM so it always reflects reality.
         var imgs = document.querySelectorAll('img');
         var list = [];
@@ -217,7 +309,8 @@
           try {
             window.Buccaneer.diagnosticEvent('compositor_proxy', JSON.stringify({
               realImg: realImg, emptyImg: emptyImg,
-              fixedImgs: fixedImgs, clippedImgs: clippedImgs
+              fixedImgs: fixedImgs, clippedImgs: clippedImgs,
+              cardHidden: cardVirtualized
             }));
           } catch (e) { /* bridge not ready */ }
         }

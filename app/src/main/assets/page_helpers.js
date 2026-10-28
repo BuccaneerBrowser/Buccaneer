@@ -580,16 +580,19 @@
   function installDeadVideoRetry() {
     if (window.__deadVideoRetryInstalled) return;
     window.__deadVideoRetryInstalled = true;
-    var deadSince = 0;
+    var deadSince = 0;   // video first "genuinely dead" (source attached, ns=0/3)
+    var ns2Since = 0;    // video first "ns=2 dead" (actively loading / CDN failover)
+    var timerVideo = null; // the video element the timers are keyed to
     var LS_KEY = '__deadVideoRetry';
     var COOLDOWN_MS = 60000; // don't re-reload the same URL within 60s
-    var DEAD_MS = 8000; // a video dead for 8s is considered failed
+    var DEAD_MS = 8000;      // genuinely-dead (ns=0/3 + source): reload after 8s
+    var NS2_MS = 120000;     // ns=2 dead persisting 120s = CDN failover failed; bounded retry
 
-    function isDeadVideo(v) {
+    // A "player" video: 0x0/readyState=0 inside a >=200x150 container (not a trailer).
+    function isDeadShape(v) {
       try {
         if (v.videoWidth !== 0 || v.videoHeight !== 0) return false;
         if (v.readyState !== 0) return false;
-        // Must be in a "player" container (>= 200x150), not a tiny/trailer video.
         var el = v.parentElement || v;
         for (var i = 0; i < 4 && el; i++) {
           var r = el.getBoundingClientRect();
@@ -600,36 +603,76 @@
       } catch (e) { return false; }
     }
 
-    function findDeadVideo() {
+    function findDeadShapeVideo() {
       var all = [];
       collect(document, 2, all);
       for (var i = 0; i < all.length; i++) {
-        if (isDeadVideo(all[i])) return all[i];
+        if (isDeadShape(all[i])) return all[i];
       }
       return null;
     }
 
-    setInterval(function () {
-      var v = findDeadVideo();
-      if (v) {
-        if (!deadSince) deadSince = Date.now();
-        if (Date.now() - deadSince >= DEAD_MS) {
-          try {
-            var now = Date.now();
-            var url = location.href;
-            var raw = localStorage.getItem(LS_KEY);
-            var last = raw ? JSON.parse(raw) : null;
-            if (last && last.url === url && (now - last.ts) < COOLDOWN_MS) {
-              deadSince = 0; // already retried recently; stop
-              return;
-            }
-            localStorage.setItem(LS_KEY, JSON.stringify({ url: url, ts: now }));
-          } catch (e) { /* ignore */ }
-          try { console.warn('[dead-video-retry] reloading: video 0x0/readyState=0 for ' + (Date.now() - deadSince) + 'ms'); } catch (e) { /* ignore */ }
-          location.reload();
+    function doReload(reason) {
+      var allowed = true;
+      var nativeUsed = false;
+      try {
+        if (window.Buccaneer && typeof window.Buccaneer.canRetryDeadVideo === 'function') {
+          allowed = window.Buccaneer.canRetryDeadVideo();
+          nativeUsed = true;
         }
-      } else {
+      } catch (e) { nativeUsed = false; allowed = true; }
+      if (!nativeUsed) {
+        // Fallback: localStorage (best-effort; flaky in cross-origin iframes).
+        // Runs when the native method is MISSING OR THREW.
+        try {
+          var now = Date.now();
+          var url = location.href;
+          var raw = localStorage.getItem(LS_KEY);
+          var last = raw ? JSON.parse(raw) : null;
+          if (last && last.url === url && (now - last.ts) < COOLDOWN_MS) {
+            allowed = false;
+          } else {
+            localStorage.setItem(LS_KEY, JSON.stringify({ url: url, ts: now }));
+          }
+        } catch (e) { /* localStorage failed; fail open (allowed stays true) */ }
+      }
+      if (!allowed) return false; // cooldown active; don't reload
+      try { console.warn('[dead-video-retry] reloading: ' + reason); } catch (e) { /* ignore */ }
+      location.reload();
+      return true;
+    }
+
+    setInterval(function () {
+      var v = findDeadShapeVideo();
+      if (!v) { deadSince = 0; ns2Since = 0; timerVideo = null; return; }
+      // Key the timers to the video element: if the player swaps <video> elements
+      // (destroys one, creates a new one), the "how long has THIS video been dead"
+      // clock must restart, or a fresh element inherits a stale timer and reloads early.
+      if (v !== timerVideo) { timerVideo = v; deadSince = 0; ns2Since = 0; }
+      if (v.networkState === 2) {
+        // Actively loading = the player's own CDN failover is in progress.
+        // Don't reload during the first NS2_MS (let the failover walk its CDN list —
+        // an 8s reload was resetting it to CDN #1 every cycle on coreflix/vidcore).
+        // Bounded retry: if the ns=2 dead state persists past NS2_MS, reload once
+        // (self-heal in case a CDN recovered). NS2_MS (120s) is well beyond the
+        // observed failover time (~4s best, ~60s worst), so this does not reset a
+        // still-in-progress failover.
+        if (!ns2Since) ns2Since = Date.now();
         deadSince = 0;
+        if (Date.now() - ns2Since >= NS2_MS) {
+          if (doReload('ns=2 dead for ' + (Date.now() - ns2Since) + 'ms')) ns2Since = 0;
+        }
+      } else if (!v.currentSrc) {
+        // No source set = the player is still searching (Mode A). Don't reload.
+        deadSince = 0; ns2Since = 0;
+      } else {
+        // Source attached but network empty (ns=0/3) = genuinely dead source.
+        // Original behavior preserved: reload after DEAD_MS.
+        if (!deadSince) deadSince = Date.now();
+        ns2Since = 0;
+        if (Date.now() - deadSince >= DEAD_MS) {
+          if (doReload('video 0x0/readyState=0 for ' + (Date.now() - deadSince) + 'ms')) deadSince = 0;
+        }
       }
     }, 2000);
   }
@@ -1534,29 +1577,130 @@
   // No timers, no continuous polling — to avoid the PowerVR GPU crash that heavier
   // instrumentation triggers on flixer.
   if (__isFlixer) {
-    (function installFlixerFsGuard() {
-      if (window.__fbFlixerFsGuard) return;
-      window.__fbFlixerFsGuard = true;
-      var WINDOW_MS = 5000;
-      var suppressUntil = Date.now() + WINDOW_MS;
-      document.addEventListener('play', function () {
-        suppressUntil = Date.now() + WINDOW_MS;
+    (function installFlixerPlayerFixes() {
+      if (window.__fbFlixerPlayerFixes) return;
+      window.__fbFlixerPlayerFixes = true;
+
+      // Flixer player fixes. Passive event listeners only — no timers, no continuous
+      // polling — to avoid the PowerVR GPU crash that heavier instrumentation triggers.
+      //
+      //  (1) No auto-fullscreen: the player auto-enters native fullscreen ~1s after the
+      //      video starts playing (a setTimeout in its play function), which "locks" the
+      //      player (the D-pad remaps to seek/volume and the pointer is trapped). We block
+      //      requestFullscreen() calls that happen shortly after a 'play' event, UNLESS the
+      //      user just clicked a control-bar button (within 800ms) — which indicates a
+      //      user-initiated fullscreen (the fullscreen button is a control-bar button).
+      //  (2) Menus open on click, not hover: the player's menus (server/episode/settings)
+      //      open on 'onMouseEnter' (hover). On a TV the cursor generates hover events, so
+      //      the menus open unexpectedly as the cursor passes over them. We stop 'mouseover'
+      //      on the control-bar buttons so React's 'onMouseEnter' does not fire; the menus
+      //      still open on click (their 'onClick' handlers are untouched).
+      //  (3) Auto-try next source on failure: the player has its own auto-switch (switch to
+      //      the next server when one fails). We add a minimal retry as a safety net for the
+      //      case where there is no other server: if the video errors and is not playing,
+      //      re-play it after 3s (max 3 retries). The retry is cancelled as soon as the
+      //      video plays (the auto-switch or the retry succeeded).
+
+      var lastPlayTime = 0;
+      var lastCtrlClickTime = 0;
+      var retryCount = 0;
+      var retryTimer = null;
+
+      // The flixer player's control-bar buttons all share these Tailwind classes.
+      function isCtrlBtn(el) {
+        return !!(el && el.tagName === 'BUTTON' && el.classList &&
+          el.classList.contains('w-12') && el.classList.contains('h-12') &&
+          el.classList.contains('rounded-full'));
+      }
+      function findCtrlBtn(el) {
+        while (el && el !== document) {
+          if (isCtrlBtn(el)) return el;
+          el = el.parentElement;
+        }
+        return null;
+      }
+
+      // (1) No auto-fullscreen.
+      document.addEventListener('play', function () { lastPlayTime = Date.now(); }, true);
+      document.addEventListener('click', function (e) {
+        if (findCtrlBtn(e.target)) lastCtrlClickTime = Date.now();
       }, true);
       var proto = window.Element.prototype;
-      var names = ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
-      for (var i = 0; i < names.length; i++) {
-        var n = names[i];
+      var fsNames = ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
+      for (var i = 0; i < fsNames.length; i++) {
+        var n = fsNames[i];
         if (typeof proto[n] !== 'function') continue;
         var orig = proto[n];
         proto[n] = function () {
-          if (Date.now() < suppressUntil) {
-            return Promise.reject(new Error('auto fullscreen suppressed'));
-          }
+          var now = Date.now();
+          // User just clicked a control-bar button (e.g. the fullscreen button) -> allow.
+          if (now - lastCtrlClickTime < 800) return orig.apply(this, arguments);
+          // Within 3s of a 'play' event and no recent control-bar click -> auto-fullscreen, block.
+          if (now - lastPlayTime < 3000) return Promise.reject(new Error('auto fullscreen suppressed'));
           return orig.apply(this, arguments);
         };
       }
+
+      // (2) Menus open on click, not hover.
+      //
+      // REVERTED (2026-10-27): all hover-fix attempts broke video playback (the
+      // menu-detection logic accidentally triggered control-bar buttons). Removed
+      // entirely per user direction — video reliability takes priority. The menus
+      // will open on hover again (the site's default behavior). A correct fix will
+      // be attempted later with a safer approach.
+
+      // (3) Auto-try next source on failure (safety net).
+      function attachVideoRetry(v) {
+        if (v.__fbRetryAttached) return;
+        v.__fbRetryAttached = true;
+        v.addEventListener('error', function () {
+          if (!v.paused) return;            // still playing, nothing to retry
+          if (retryCount >= 3 || retryTimer) return;
+          retryTimer = setTimeout(function () {
+            retryTimer = null;
+            retryCount++;
+            try { v.play().catch(function () {}); } catch (err) { /* ignore */ }
+          }, 3000);
+        });
+        v.addEventListener('play', function () {
+          if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; retryCount = 0; }
+        });
+      }
+      var mo = new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          var added = muts[i].addedNodes;
+          for (var j = 0; j < added.length; j++) {
+            var node = added[j];
+            if (node.nodeType !== 1) continue;
+            if (node.tagName === 'VIDEO') attachVideoRetry(node);
+            else if (node.querySelectorAll) {
+              var vs = node.querySelectorAll('video');
+              for (var k = 0; k < vs.length; k++) attachVideoRetry(vs[k]);
+            }
+          }
+        }
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
     })();
   }
+
+  // Auto-unmute on video start: when a video begins playing, make sure it is not muted.
+  // This is the user's requirement that video is not muted when it starts, on all sites.
+  //
+  // Minimal by design: one capture-phase 'play' listener (the same pattern the flixer
+  // fullscreen guard above uses). No timers, no continuous polling — so it does not add
+  // the GPU/CPU load that triggers the PowerVR crash on flixer. It only acts once per
+  // play event (setting muted=false is a no-op if already unmuted), and it never mutes.
+  // Placed before the flixer early-return below so it is installed on every site.
+  (function installAutoUnmute() {
+    if (window.__fbAutoUnmuteInstalled) return;
+    window.__fbAutoUnmuteInstalled = true;
+    document.addEventListener('play', function (e) {
+      var v = e && e.target;
+      if (!v || v.tagName !== 'VIDEO') return;
+      try { if (v.muted) v.muted = false; } catch (err) { /* ignore */ }
+    }, true);
+  })();
 
   // Flixer: stop here. The passive __fb API above is available for explicit Android-driven
   // commands (video controls, typing). Everything below installs continuous capture-phase

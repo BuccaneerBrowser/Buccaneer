@@ -26,11 +26,17 @@
   }
   function snapshot(el) {
     var value=el.value!==undefined?el.value:(el.textContent||''),pw=el.type==='password';
-    return {ok:1,doc:documentId,frame:frameId,field:fieldId(el),focused:(typeof document.hasFocus!=='function'||document.hasFocus())?1:0,v:pw?'':String(value).slice(0,4096),pw:pw?1:0,length:String(value).length};
+    var doc;try{doc=window.Buccaneer.currentDocument();}catch(e){doc=documentId;}
+    return {ok:1,doc:doc,frame:frameId,field:fieldId(el),focused:(typeof document.hasFocus!=='function'||document.hasFocus())?1:0,v:pw?'':String(value).slice(0,4096),pw:pw?1:0,length:String(value).length};
   }
   function reportField() {
-    if(typeof document.hasFocus==='function' && !document.hasFocus())return;
+    var hf = (typeof document.hasFocus !== 'function') || document.hasFocus();
+    if (!hf) {
+      try { window.Buccaneer.diagnosticEvent('report_field_drop', JSON.stringify({reason:'no_focus', active: !!active()})); } catch(e) {}
+      return;
+    }
     var el=active();if(!el)return;
+    try { window.Buccaneer.diagnosticEvent('report_field', JSON.stringify({hasFocus:1, field: fieldId(el)})); } catch(e) {}
     try {window.Buccaneer.editableFocused(frameId,JSON.stringify(snapshot(el)));} catch(e) {}
   }
   // Read only, qualified by document/frame/field. Never expose password contents.
@@ -328,7 +334,8 @@
   document.addEventListener('focusin',function(){setTimeout(reportField,0);},true);
   document.addEventListener('focusout',function(e){
     var el=editable(e.target);if(!el)return;
-    try{window.Buccaneer.editableBlurred(frameId,documentId,fieldId(el));}catch(x){}
+    var doc;try{doc=window.Buccaneer.currentDocument();}catch(x){doc=documentId;}
+    try{window.Buccaneer.editableBlurred(frameId,doc,fieldId(el));}catch(x){}
   },true);
   document.addEventListener('input',reportField,true);
   document.addEventListener('click',function(e){if(e.isTrusted){rememberMenuTrigger(e.target);watchMenus();}},true);

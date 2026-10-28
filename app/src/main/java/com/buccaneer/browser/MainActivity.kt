@@ -152,6 +152,21 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private lateinit var fullscreenBox: FrameLayout
     private lateinit var osd: Osd
 
+    // Dead-video-retry cooldown, keyed by the top-level page host+path (stable across
+    // iframe and top-page reloads; query-string-insensitive). Lives on the Activity so it
+    // survives page reloads and does not depend on the flaky cross-origin iframe
+    // localStorage. NOTE: lost on Activity recreation / process death — acceptable, the
+    // worst case is one extra retry after a restart.
+    private val deadVideoRetryState = HashMap<String, Long>()
+    private val deadVideoRetryLock = Any()
+    private val DEAD_VIDEO_RETRY_COOLDOWN_MS = 60000L
+    private val DEAD_VIDEO_RETRY_MAX_ENTRIES = 50
+    // Top-level page URL, cached on the main thread (onPageStarted/onPageFinished) so the
+    // dead-video-retry cooldown key can be read off the UI thread. WebView.getUrl() must be
+    // called on the main thread; JavascriptInterface methods run on the JavaBridge thread.
+    @Volatile
+    private var cachedPageUrl: String? = null
+
     private val handler = Handler(Looper.getMainLooper())
     private val navigationHandoff = NavigationHandoff(
         { task, delay -> handler.postDelayed(task, delay) }, { handler.removeCallbacks(it) }
@@ -537,10 +552,18 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         darkMode = prefs.getBoolean("darkMode", true)
         desktopSite = prefs.getBoolean("desktopSite", true)
-        autoplay = prefs.getBoolean("autoplay", false)
+        autoplay = prefs.getBoolean("autoplay", true)
         lowQuality = prefs.getBoolean("lowQuality", true)
         exclusiveVideo = prefs.getBoolean("exclusiveVideo", true)
         crashReloadCount = prefs.getInt("crashReloadCount", 0)
+        // A clean exit means the previous session ended normally, not a crash. Reset the
+        // crash-retry budget so a normal launch never reopens lastCrashUrl — that is
+        // reserved for crash recovery only (cleanExit is false after a real crash).
+        // Read before line below clears it.
+        if (prefs.getBoolean("cleanExit", false)) {
+            crashReloadCount = 0
+            prefs.edit().putInt("crashReloadCount", 0).commit()
+        }
         // Read the watchdog state before the crash window is cleared: a restart the watchdog
         // caused means the previous process died in a native crash nothing here could catch.
         val watchdogRestart = prefs.getBoolean("watchdogRestart", false)
@@ -789,8 +812,13 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
         s.databaseEnabled = true
-        // No video or sound may start by itself: a hidden preview or an ad must not take the only
-        // video decoder away from the player you chose. (Settings > Autoplay without a click.)
+        // Autoplay without a click is ON by default (user request: video should
+        // autoplay when it loads). The primary protection against a hidden
+        // preview/ad stealing the single video decoder is the exclusive-video
+        // subsystem (page_helpers.js, exclusiveVideo pref, default ON), which
+        // pauses competing media the moment the real player plays. The gesture
+        // flag below is an optional hardening the user can re-enable via
+        // Settings > Autoplay without a click.
         s.mediaPlaybackRequiresUserGesture = !autoplay
         s.useWideViewPort = true
         s.loadWithOverviewMode = true
@@ -960,6 +988,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
 
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
             if (!pageAvailable() || (view != null && view !== webView)) return
+            cachedPageUrl = url
             if (navigationPending()) {
                 // This load predates the pending native command. Its notification
                 // cannot cancel the command or replace the recovery destination.
@@ -1220,6 +1249,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
 
         override fun onPageFinished(view: WebView?, url: String?) {
             if (!pageAvailable() || navigationPending() || (view != null && view !== webView)) return
+            cachedPageUrl = url
             val loadMs = if (pageStartedAt > 0L) SystemClock.elapsedRealtime() - pageStartedAt else -1L
             DiagnosticLog.record(this@MainActivity, "page_finished", JSONObject().apply {
                 put("url", DiagnosticLog.safeUrl(url))
@@ -1504,6 +1534,54 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         @JavascriptInterface
         fun currentDocument(): String = documentToken
 
+        /** Top-level page host+path as the dead-video-retry cooldown key; "unknown" if the URL is unavailable. */
+        private fun retryCooldownKey(): String {
+            // Read the main-thread-cached URL (WebView.getUrl() is not safe off the UI thread).
+            val url = cachedPageUrl ?: return "unknown" // fallback key (still applies the cooldown)
+            return try {
+                val uri = android.net.Uri.parse(url)
+                (uri.host ?: "") + (uri.path ?: "")
+            } catch (t: Throwable) {
+                url
+            }
+        }
+
+        /**
+         * Dead-video-retry cooldown gate. Called by page_helpers.js before reloading a dead
+         * player iframe. Returns true if a retry is allowed (and records it), false if a retry
+         * happened within the cooldown window for the current page. Keyed by the top-level page
+         * host+path (stable across iframe/top-page reloads).
+         */
+        @JavascriptInterface
+        fun canRetryDeadVideo(): Boolean {
+            if (!pageAvailable()) {
+                DiagnosticLog.record(this@MainActivity, "dead_retry_blocked", "pageAvailable=false")
+                return true
+            }
+            return try {
+                val key = retryCooldownKey()
+                val now = SystemClock.elapsedRealtime()
+                synchronized(deadVideoRetryLock) {
+                    val last = deadVideoRetryState[key]
+                    val blocked = last != null && now - last < DEAD_VIDEO_RETRY_COOLDOWN_MS
+                    DiagnosticLog.record(this@MainActivity, "dead_retry_check",
+                        "key=$key lastAgoMs=${if (last != null) (now - last).toString() else "none"} blocked=$blocked")
+                    if (blocked) {
+                        return false
+                    }
+                    deadVideoRetryState[key] = now
+                    if (deadVideoRetryState.size > DEAD_VIDEO_RETRY_MAX_ENTRIES) {
+                        val oldest = deadVideoRetryState.entries.minByOrNull { it.value }?.key
+                        oldest?.let { deadVideoRetryState.remove(it) }
+                    }
+                    true
+                }
+            } catch (t: Throwable) {
+                DiagnosticLog.record(this@MainActivity, "dead_retry_error", t.toString())
+                true
+            }
+        }
+
         @JavascriptInterface
         fun editableFocused(frame: String?, state: String?) {
             val id = frame?.take(120) ?: return
@@ -1527,12 +1605,20 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                         bufferPassword = false
                         handler.removeCallbacks(syncRunnable)
                     }
-                    if (textMode == TextMode.PAGE && inputFrame.isEmpty() && SystemClock.uptimeMillis() - lastTapAt !in 0L..2000L) return@runOnUiThread
+                    if (textMode == TextMode.PAGE && inputFrame.isEmpty() && SystemClock.uptimeMillis() - lastTapAt !in 0L..2000L) {
+                        DiagnosticLog.record(this@MainActivity, "field_reg_drop", JSONObject()
+                            .put("reason", "tap_window").put("sinceTapMs", (SystemClock.uptimeMillis() - lastTapAt).toString())
+                            .put("field", fieldId).put("textMode", "PAGE"))
+                        return@runOnUiThread
+                    }
                     if (textMode != TextMode.PAGE && (lastTapAt <= 0 || SystemClock.uptimeMillis() - lastTapAt !in 0L..2000L)) return@runOnUiThread
                     inputFrame = id
                     inputFieldId = fieldId
                     inputFieldState = data
                     inputFocusConfirmed = true
+                    DiagnosticLog.record(this@MainActivity, "field_reg_ok", JSONObject()
+                        .put("field", fieldId).put("frame", id)
+                        .put("sinceTapMs", (SystemClock.uptimeMillis() - lastTapAt).toString()))
                     focusFromPage(data)
                     if (textMode == TextMode.PAGE) syncFieldSoon()
                 }
@@ -3384,11 +3470,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         items.add(MenuItem("Address / search") { promptUrl() })
         // 7. Full screen
         items.add(MenuItem("Full-screen video") { fullscreenVideo() })
-        // 8. Fit submenus to screen
-        items.add(MenuItem("Fit open submenus to screen") {
-            eval("window.__tvUi ? __tvUi.fitMenus() : 0")
-            toast("Adjusted recognized dropdown menus")
-        })
+        // 8. Fit submenus to screen — option removed from menu (Mommy 2026-10-27);
+        //    fitMenus() code kept in tv_ui.js, item kept here commented out.
+        // items.add(MenuItem("Fit open submenus to screen") {
+        //     eval("window.__tvUi ? __tvUi.fitMenus() : 0")
+        //     toast("Adjusted recognized dropdown menus")
+        // })
         // 9. Block redirects
         val host: String? = if (url != null) {
             try {

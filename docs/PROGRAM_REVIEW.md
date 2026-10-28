@@ -25,6 +25,20 @@
 
 ---
 
+## Binding working rules (2026-10-27 — user-directed, override prior habits)
+
+These exist because repeated "stab in the dark" edits broke video playback and eroded trust. They apply to **every** coding session on this project.
+
+1. **Research first — no code edits** until the mechanism is fully understood (not just "the bug happens," but *why* and *where*).
+2. **Write the plan, show the user, wait for approval** before editing.
+3. **One clean edit per fix** — no iterative mutations across turns. If the first edit is wrong, revert it and re-plan; do not layer a second edit on top.
+4. **Verify before reporting done** — confirm the fix works *and* didn't break anything (video playback is the #1 regression to check).
+5. **All bad fixes must be reverted once decided bad.** No leaving broken or dead code in the tree. If a fix is determined to be the cause of a regression, remove it entirely (restore the prior behavior) before attempting anything else.
+
+**Current open issues + verified facts + what-failed list:** see `docs/HANDOFF-2026-10-27.md`.
+
+---
+
 ## Part 1 -- System overview
 
 ### 1.1 What the app is
