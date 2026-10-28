@@ -472,72 +472,14 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var lastHoverAt = 0L
     private val hideCursorRunnable = object : Runnable {
         override fun run() {
-            // While a page is loading or blocked, keep the pointer visible so its loading
-            // bar / red X stays on screen.
-            if (cursor.loading || cursor.blocked) {
+            // While a page is loading, keep the pointer visible so its loading bar stays on screen.
+            if (cursor.loading) {
                 handler.postDelayed(this, 2000)
                 return
             }
             cursor.visibility = View.GONE
             liftPointerIfPlaying()
             hoverActive = false
-        }
-    }
-
-    // ---- "page visible but not interactive yet" (hydration) indicator
-    // The pointer turns into a red X from the first page_finished until the page is proven
-    // responsive. A trivial JS-eval round trip is the probe: it runs on the same page thread
-    // that queues taps, so it is delayed by exactly the same blocking. The X clears when:
-    //   - the probe shows a SUSTAINED fast streak of >= 3 s (a brief gap between hydration
-    //     tasks is not enough to clear the X). A 2nd page_finished is deliberately NOT used
-    //     as a settle signal: it can fire before the page is truly interactive (hydration
-    //     mismatch), which cleared the X early.
-    //   - a 20 s timeout.
-    private var pageFinishedCount = 0
-    private var cursorBlockedSince = 0L
-    private var fastStreakStart = 0L
-    private var lastFastProbeAt = 0L
-    private val cursorProbeRunnable = object : Runnable {
-        override fun run() {
-            if (!pageAvailable() || !cursor.blocked) return
-            val now = SystemClock.elapsedRealtime()
-            if (now - cursorBlockedSince > 20000) {
-                cursor.blocked = false
-                DiagnosticLog.record(this@MainActivity, "cursor_interactive", JSONObject().apply {
-                    put("signal", "timeout")
-                    put("sinceBlockedMs", now - cursorBlockedSince)
-                })
-                return
-            }
-            val t0 = now
-            try {
-                webView.evaluateJavascript("1") { _ ->
-                    if (!cursor.blocked) return@evaluateJavascript
-                    val dt = SystemClock.elapsedRealtime() - t0
-                    val now2 = SystemClock.elapsedRealtime()
-                    if (dt < 500) {
-                        // Extend (or start) the fast streak. A streak breaks if the gap
-                        // between fast probes exceeds 800 ms (a slow probe in between).
-                        if (lastFastProbeAt == 0L || now2 - lastFastProbeAt > 800) {
-                            fastStreakStart = now2
-                        }
-                        lastFastProbeAt = now2
-                        if (now2 - fastStreakStart >= 3000) {
-                            cursor.blocked = false
-                            DiagnosticLog.record(this@MainActivity, "cursor_interactive", JSONObject().apply {
-                                put("signal", "probe")
-                                put("dtMs", dt)
-                                put("sinceBlockedMs", now2 - cursorBlockedSince)
-                            })
-                        }
-                    } else {
-                        fastStreakStart = 0L
-                        lastFastProbeAt = 0L
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-            handler.postDelayed(this, 300)
         }
     }
 
@@ -1097,12 +1039,6 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             maybeBlockAdRedirect(url)
             injectFallback(view)
             cursor.loading = true
-            // New navigation: reset the hydration indicator and any in-flight probe.
-            cursor.blocked = false
-            pageFinishedCount = 0
-            fastStreakStart = 0L
-            lastFastProbeAt = 0L
-            handler.removeCallbacks(cursorProbeRunnable)
             if (!startPage.shown()) {
                 progress.fraction = 0.05f
                 progress.visibility = View.VISIBLE
@@ -1333,23 +1269,6 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             try { view?.evaluateJavascript(fmhyThemeJs, null) } catch (_: Throwable) {}
             cursor.loading = false
             progress.visibility = View.GONE
-            // The HTML is on screen, but the page's main thread may still be busy (e.g. a
-            // SPA hydrating), which queues clicks. Show the red X and probe until the page
-            // proves responsive. Only the first finish of a navigation starts the window; a
-            // later finish (hydration settling) does not restart it.
-            pageFinishedCount++
-            if (pageFinishedCount == 1 && url != null && url != "about:blank") {
-                cursor.blocked = true
-                cursorBlockedSince = SystemClock.elapsedRealtime()
-                fastStreakStart = 0L
-                lastFastProbeAt = 0L
-                handler.removeCallbacks(cursorProbeRunnable)
-                handler.postDelayed(cursorProbeRunnable, 300)
-                DiagnosticLog.record(this@MainActivity, "cursor_blocked_start", JSONObject().apply {
-                    put("url", DiagnosticLog.safeUrl(url))
-                    put("loadMs", loadMs)
-                })
-            }
             // Loading can finish before a delayed GPU crash. Keep the URL/time-window
             // retry budget; a page_finished callback is not evidence of stability.
             if (pendingClearHistory) {
@@ -2013,8 +1932,6 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         pendingClearHistory = true
         progress.visibility = View.GONE
         cursor.loading = false
-        cursor.blocked = false
-        handler.removeCallbacks(cursorProbeRunnable)
         hideCursor()
         startPage.show()
     }
