@@ -8,3 +8,6 @@ docs/audit-2026-10-23.md
 docs/ROADMAP_TODO.md
 # Changelog references specific sites — keep in dev dir only, never push
 CHANGELOG.md
+
+# All markdown docs are private dev references — never publish
+*.md

@@ -3479,7 +3479,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         items.add(MenuItem("Address / search") { promptUrl() })
         // 7. Full screen
         items.add(MenuItem("Full-screen video") { fullscreenVideo() })
-        // 8. Fit submenus to screen — option removed from menu (Mommy 2026-10-27);
+        // 8. Fit submenus to screen — option removed from menu;
         //    fitMenus() code kept in tv_ui.js, item kept here commented out.
         // items.add(MenuItem("Fit open submenus to screen") {
         //     eval("window.__tvUi ? __tvUi.fitMenus() : 0")
