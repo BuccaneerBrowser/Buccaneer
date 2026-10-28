@@ -789,7 +789,7 @@
       if (v.networkState === 2) {
         // Actively loading = the player's own CDN failover is in progress.
         // Don't reload during the first NS2_MS (let the failover walk its CDN list —
-        // an 8s reload was resetting it to CDN #1 every cycle on coreflix/vidcore).
+        // an 8s reload was resetting it to CDN #1 every cycle on one portal).
         // Bounded retry: if the ns=2 dead state persists past NS2_MS, reload once
         // (self-heal in case a CDN recovered). NS2_MS (120s) is well beyond the
         // observed failover time (~4s best, ~60s worst), so this does not reset a
@@ -864,7 +864,7 @@
       // A few pokes are enough to start the idle timer on players whose controls
       // stay up forever without a pointer event (the lazy-load poster site-style). Poking
       // continuously instead keeps resetting the idle timer on players that
-      // auto-hide on their own (MovieBite-style), so their controls — and the
+      // auto-hide on their own, so their controls — and the
       // center play/pause button — never go away. Poke a bounded number of times,
       // then stop and let the player's own idle logic take over.
       var pokes = 0;
@@ -904,7 +904,7 @@
   // bottom control bar. When the player's own idle timer hides the bar (adding
   // player-fade-out, which sets pointer-events:none), the hit-test at the stale position
   // now lands on the video, and the browser fires a TRUSTED mouseout/mouseleave on the
-  // bar. Nova's bottom bar treats mouseleave as "re-show the controls" (its scrub-release
+  // bar. The player's bottom bar treats mouseleave as "re-show the controls" (its scrub-release
   // path), so the bar re-appears ~30 ms after every auto-hide and the 3 s timer restarts:
   // the controls flicker forever.
   //
@@ -1718,7 +1718,7 @@
       if (window.__fbFlixerPlayerFixes) return;
       window.__fbFlixerPlayerFixes = true;
 
-      // Flixer player fixes. Passive event listeners only — no timers, no continuous
+      // Player fixes. Passive event listeners only — no timers, no continuous
       // polling — to avoid the PowerVR GPU crash that heavier instrumentation triggers.
       //
       //  (1) No auto-fullscreen: the player auto-enters native fullscreen ~1s after the
@@ -1743,7 +1743,7 @@
       var retryCount = 0;
       var retryTimer = null;
 
-      // The flixer player's control-bar buttons all share these Tailwind classes.
+      // The player's control-bar buttons all share these Tailwind classes.
       function isCtrlBtn(el) {
         return !!(el && el.tagName === 'BUTTON' && el.classList &&
           el.classList.contains('w-12') && el.classList.contains('h-12') &&

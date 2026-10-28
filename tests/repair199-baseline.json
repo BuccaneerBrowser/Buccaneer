@@ -8,7 +8,7 @@
     "flixer_image_guard.js": "147f8bcd54cdd92e3b0d63c25ded876efb329518e0f15db4360f87c89883e179",
     "fmhy_theme.js": "6f10767f14524d23fabef756f6f4006184bb19e5972ca6ad07463f8021be4d73"
   },
-  "cinejoySha256": "8439eec997e74d3712382aa01e7f8a61beab9b3a8b89bb823c7b17369c1a45b4",
-  "cinejoyBefore": "      // A fresh default does not erase an existing explicit website choice.\n      if (!owned && pref.revision === 0 && hasQuality && typeof settings.quality === 'number' && settings.quality > 0)\n        return 'manual';",
-  "cinejoyAfter": "      // Existing storage alone cannot establish a deliberate user choice in this session.\n      // Seed the app preference once; later site changes under the same key still win."
+  "siteSha256": "8439eec997e74d3712382aa01e7f8a61beab9b3a8b89bb823c7b17369c1a45b4",
+  "siteBefore": "      // A fresh default does not erase an existing explicit website choice.\n      if (!owned && pref.revision === 0 && hasQuality && typeof settings.quality === 'number' && settings.quality > 0)\n        return 'manual';",
+  "siteAfter": "      // Existing storage alone cannot establish a deliberate user choice in this session.\n      // Seed the app preference once; later site changes under the same key still win."
 }

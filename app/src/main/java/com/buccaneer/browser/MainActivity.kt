@@ -1150,7 +1150,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     })
                 }
             }
-            // Flixer trailer video: the show/movie detail page embeds a looping
+            // Trailer video: the show/movie detail page embeds a looping
             // YouTube trailer in an iframe. The continuous per-frame decode+composite
             // is a major GPU load that tips the PowerVR driver over (the
             // KEGLReleaseRenderTarget crash). Intercept the YouTube embed request and
@@ -1170,7 +1170,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     )
                 }
             }
-            // Flixer hero downscale: the show/movie detail page loads a 4K TMDB
+            // Hero downscale: the show/movie detail page loads a 4K TMDB
             // backdrop (image.tmdb.org/t/p/original/..., 3840x2160, ~33MB GPU
             // texture) displayed at ~945x540. That oversized texture is the single
             // biggest GPU-memory waste on the page and a major driver of the
@@ -1205,7 +1205,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     }
                 }
             }
-            // Flixer episode-poster downscale: the detail page's episode list
+            // Episode-poster downscale: the detail page's episode list
             // loads w500 TMDB posters (500x750, ~1.5MB GPU texture each)
             // displayed at ~180x230. 18+ posters = ~27MB GPU memory, which
             // evicts the hero's texture (raster loss / black hero). Scrolling
