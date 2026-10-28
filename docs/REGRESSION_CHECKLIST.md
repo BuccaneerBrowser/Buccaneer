@@ -20,7 +20,7 @@ after every change so breakage is caught immediately, not discovered later.
 ## The five features
 
 ### 1. Popups (blocked)
-- **Test:** Navigate to a site with known popups (flixer movie page, or a page where a `z=2147483647` overlay appears).
+- **Test:** Navigate to a site with known popups (poster-grid site movie page, or a page where a `z=2147483647` overlay appears).
 - **How:** Manual (DPAD) — the popup is DPAD-focus-triggered; it cannot be reproduced via CDP.
 - **Expected:** The popup does NOT appear (or is killed within ~200ms).
 - **Automated signal:** `overlay_killed` events in the diagnostic log with `reason: high_z_ad | floating_iframe | viewport_catcher`.
@@ -47,8 +47,8 @@ after every change so breakage is caught immediately, not discovered later.
 - **Automated signal:** None (DPAD-dependent).
 - **Pass/Fail:** ___
 
-### 5. Poster auto-open (flixer)
-- **Test:** Navigate the flixer movie grid with DPAD over several posters.
+### 5. Poster auto-open (poster-grid site)
+- **Test:** Navigate the poster-grid site movie grid with DPAD over several posters.
 - **How:** Manual (DPAD) — the preview is DPAD-focus-triggered.
 - **Expected:** The floating preview does NOT auto-open on focus. Pressing OK opens the movie page.
 - **Automated signal:** Poster guard active via CDP (`window.__flixerPosterGuard === true`, `#__flixer_poster_guard_style` present).
@@ -64,7 +64,7 @@ It checks (on the given page):
 - Popup guard active + any `overlay_killed` signals in the page.
 - Search UI presence.
 - Video element state (present, fullscreen, playing).
-- Poster guard active (flixer only).
+- Poster guard active (poster-grid site only).
 
 It does **not** check: FF/rewind, fullscreen feel, DPAD navigation smoothness —
 those require the remote and are manual.
@@ -78,9 +78,9 @@ those require the remote and are manual.
   must spare these. If `covers_video` kills appear on player classes, the exemption
   is failing.
 - **`high_z_ad` kills** — the new `isHighZAd` rule (z >= 1,000,000 && area >= 1000)
-  kills max-z ad overlays. Correct on flixer/cinejoy. Must NOT kill legitimate
+  kills max-z ad overlays. Correct on poster-grid site/lazy-load poster site. Must NOT kill legitimate
   high-z UI (player, modals with video).
-- **Poster guard interval** — the 200ms re-apply scan is flixer-only; must not run
+- **Poster guard interval** — the 200ms re-apply scan is poster-grid site-only; must not run
   on other hosts (check the host guard at the top of `flixer_poster_guard.js`).
 
 ## Results log
@@ -94,5 +94,5 @@ those require the remote and are manual.
 - The popup and poster auto-open are DPAD-focus-triggered, so they cannot be fully
   reproduced via CDP. They require the user's remote to verify.
 - The automated checks are a smoke test, not a full verification.
-- A crash (process restart) on a TMDB site (flixer/cinejoy) is likely a PowerVR GPU
+- A crash (process restart) on a TMDB site (poster-grid site/lazy-load poster site) is likely a PowerVR GPU
   issue; check `tmdb_allowlist_sync` counts and `deviceAvailMemMb` in the log.

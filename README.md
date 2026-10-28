@@ -1,4 +1,4 @@
-# Buccaneer 2.3.3
+# Buccaneer 2.3.4
 
 A lightweight web browser for Android TV, designed for remote control navigation and streaming content.
 
@@ -87,7 +87,7 @@ Or sideload the APK to your device.
 
 ### Main Menu
 
-The main menu (Menu button) provides:
+The main menu (Menu button or long-press Back button) provides:
 
 1. **Scroll submenu/page with D-pad** — D-pad scrolls under the pointer; Back returns to pointer mode
 2. **Start page** — Return to the bookmark start page

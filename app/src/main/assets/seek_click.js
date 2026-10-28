@@ -1,4 +1,4 @@
-// Called only after an explicit Flixer pointer click. No install-time code, listeners,
+// Called only after an explicit poster-grid site pointer click. No install-time code, listeners,
 // observers, animations, CSS, or recurring timers. Never changes ordinary button clicks.
 (function (fx, fy, mode) {
   'use strict';

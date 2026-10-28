@@ -1,4 +1,4 @@
-# BuccaneerClaude -- Full Program Review
+# Buccaneer -- Full Program Review
 
 **Version reviewed:** 2.3.1 (versionCode 24), tree `<repo-root>`, git HEAD `a390764`
 **Date:** 2026-10-22 | **Method:** line-level read of every source file (Kotlin + JS + tests + docs), cross-verified against the live app on the Fire TV via CDP (isolated worlds) and the diagnostic JSONL pulled from a real viewing session.
@@ -82,10 +82,10 @@ Six JS files are injected at **document-start** (before page scripts run) into *
 |---|---|---|---|
 | `page_helpers.js` | 1911 L | every frame | the `window.__fb` bridge: video state/commands, cross-frame command forwarding, quality scanner, network probe, fullscreen intercept, pointer poke, dark mode, media health heartbeat |
 | `tv_ui.js` | 335 L | every frame | the `window.__tvUi` bridge: field reporting (which input the user clicked), edit/submit of typed text, playback probe |
-| `popup_guard.js` | 538 L | every frame | ad/popup suppression: window.open block, target=_blank rewrite, overlay kill rules, the Coreflix `reactOnClick` workaround |
-| `flixer_image_guard.js` | 286 L | flixer + cinejoy only | TMDB poster virtualization (src-stripping off-screen posters) + 1x1 firewall coordination with native `shouldInterceptRequest` |
+| `popup_guard.js` | 538 L | every frame | ad/popup suppression: window.open block, target=_blank rewrite, overlay kill rules, the video site `reactOnClick` workaround |
+| `flixer_image_guard.js` | 286 L | poster-grid site + lazy-load poster site only | TMDB poster virtualization (src-stripping off-screen posters) + 1x1 firewall coordination with native `shouldInterceptRequest` |
 | `seek_click.js` | 72 L | on demand | seek-bar click repair (called by Java, returns a value) |
-| `fmhy_theme.js` | 23 L | fmhy host only | one-time theme class toggles (self-disconnecting observer) |
+| `fmhy_theme.js` | 23 L | SPA portal host only | one-time theme class toggles (self-disconnecting observer) |
 
 **Frame opacity rule:** a frame cannot reach into a cross-origin child iframe's DOM or window. Streaming sites nest the player 2+ levels deep, each cross-origin. Consequences (verified live 2026-10-22 on novahd.cc -> vidbolt.xyz):
 - The top frame's `__fb` cannot see the player's `<video>`; it learns the player's state via the **postMessage bridge** (`__fbCmd`/`__fbRes`) -- the top frame forwards commands, the player frame's own `page_helpers.js` executes them on its local video and replies with `state()`.
@@ -183,15 +183,15 @@ Each section: **what it does -> where it lives -> the contract -> invariants -> 
 
 **Contract:**
 - `pageEpoch` bumps on every page generation change; every async callback (eval results, posted runnables, coalesced UI, heartbeats) checks `epoch == pageEpoch` before acting. Mismatch -> drop silently.
-- `onPageCommitVisible` is the reliable "page is real" signal; **`onPageFinished` is not reliable on fmhy** -- code that waits for it hangs there.
+- `onPageCommitVisible` is the reliable "page is real" signal; **`onPageFinished` is not reliable on SPA portal** -- code that waits for it hangs there.
 - `NavigationHandoff` serializes "commit the navigation" vs "tear down the page" so a navigation requested during teardown isn't lost and a teardown during navigation doesn't kill the new page.
 - Renderer crash: `onRenderProcessGone` -> `destroyBrowser(rendererGone=true)` removes the webView from its parent (L308), nulls it, and a recreate task (deduped by `rendererRecreatePosted`) rebuilds it. `crashReloadCount` bounds reload attempts; `showCrashRecovery(url)` offers the user a retry.
-- Host detection: `isImageGuardedHost()` is the **single source of truth** for image-guarded hosts (flixer + cinejoy); `onFlixerPage` stays flixer-only (player/tap/seek behavior). Keep the two separate.
-- `shouldInterceptRequest` returns 1x1 responses for off-allowlist TMDB images **only on guarded hosts** -- extending it to other hosts breaks lazy-load detectors and load-event reporting (tried 2026-10-16, reverted: no speed gain, Coreflix quality button stopped opening).
+- Host detection: `isImageGuardedHost()` is the **single source of truth** for image-guarded hosts (poster-grid site + lazy-load poster site); `onFlixerPage` stays poster-grid site-only (player/tap/seek behavior). Keep the two separate.
+- `shouldInterceptRequest` returns 1x1 responses for off-allowlist TMDB images **only on guarded hosts** -- extending it to other hosts breaks lazy-load detectors and load-event reporting (tried 2026-10-16, reverted: no speed gain, video site quality button stopped opening).
 
 **Invariants:** the epoch/serial checks throughout are the architecture, not debt (0 TODO/FIXME in the codebase; 13 swallowed exceptions, all intentional: WebView teardown, malformed JSON from the bridge, synthetic event rejection).
 
-**Breaks if changed:** removing an epoch check -> a stale eval result from the old page acts on the new page (ghost taps, wrong seek). Changing `onPageCommitVisible` handling -> fmhy hangs. Widening the image firewall -> lazy-load UI breaks site-wide.
+**Breaks if changed:** removing an epoch check -> a stale eval result from the old page acts on the new page (ghost taps, wrong seek). Changing `onPageCommitVisible` handling -> SPA portal hangs. Widening the image firewall -> lazy-load UI breaks site-wide.
 
 **Verify:** `page_started` / `page_commit_visible` / `page_finished` events; `navigation_cleanup_dispatched` + `cleanup_script_completed` (or `cleanup_timeout`); `http_error` for status codes.
 
@@ -206,14 +206,14 @@ Each section: **what it does -> where it lives -> the contract -> invariants -> 
 - `leaveFullscreen(notifyPage)`: removes the view, hides the box, `osd.hideNow()`, refocuses the webView, and -- only if we left on our own (Back key) -- calls `callback.onCustomViewHidden()` to tell the WebView.
 - CSS fullscreen: the intercept overrides `requestFullscreen` **and** `webkitEnterFullscreen`. Gotcha: on Chromium 118/API 25, `webkitEnterFullscreen` lives on `HTMLVideoElement.prototype`, **not** `HTMLMediaElement.prototype` -- patch whichever prototype has the method, and also patch `document.webkitExitFullscreen` (the player's exit path).
 - The player-container heuristic for CSS fullscreen must NOT be a pure area walk (when the video fills the viewport, every ancestor has the same area and the walk never stops). Primary signal: the first ancestor (within ~3x video area) that contains a control `<button>`; size walk only as fallback.
-- **Flixer is excluded from the intercept** (existing behavior -- the flixer player manages its own fullscreen).
+- **poster-grid site is excluded from the intercept** (existing behavior -- the poster-grid site player manages its own fullscreen).
 - When entering CSS fullscreen pauses the video (some players do), the app auto-resumes it (commit `4b2a260`).
 - `onShowCustomView` fires mid-transition: any JS probe that needs a stable page state must be delayed (the `playerDomProbe` eval is wrapped in `postDelayed(..., 2000)` -- a synchronous eval there returns the literal `"none"`).
 - For cross-origin iframe players, the fullscreen element is the **IFRAME**, not the video. You can style the iframe from the top frame (black background for letterboxing) but cannot reach the video inside.
 
-**Invariants:** `dispatchToPage` always targets the webView, never the custom view. The 2000 ms delayed probe is not a hack to clean up. Flixer exclusion is load-bearing.
+**Invariants:** `dispatchToPage` always targets the webView, never the custom view. The 2000 ms delayed probe is not a hack to clean up. poster-grid site exclusion is load-bearing.
 
-**Breaks if changed:** the double-activation history: a direct React-handler call (the Coreflix workaround) double-fires if the real click also arrives -- the workaround defers to a 300 ms timer that a capture-phase click listener cancels. Don't "simplify" the timer.
+**Breaks if changed:** the double-activation history: a direct React-handler call (the video site workaround) double-fires if the real click also arrives -- the workaround defers to a 300 ms timer that a capture-phase click listener cancels. Don't "simplify" the timer.
 
 **Verify:** `css_fullscreen_on`/`css_fullscreen_off` events; `fullscreen_element` diagnostic (tag/id/class/size of the fullscreen element); screenshot after ~10 s idle (controls + center button gone), tap (reappear), wait (re-hide).
 
@@ -245,11 +245,11 @@ Each section: **what it does -> where it lives -> the contract -> invariants -> 
 2. Positioned element covering >= 10 % of the video.
 3. Positioned element with z-index >= 1,000,000 (injected ad click-catchers use the 32-bit max z).
 4. Positioned element covering >= 90 % of the viewport at z >= 1000 (pre-roll click-catchers on pages with no video yet).
-- **Player exemption:** the main player iframe -- the largest iframe with a real, non-blank, non-srcdoc src -- and its container chain (`el.contains(playerIframe)`) are exempt from the high-z and viewport rules. Coreflix's `watch-iframe` goes to z-index 2147483647 + position:fixed in fullscreen, the SAME max z as ad injectors; killing it caused black screen with audio + dead seek bridge (the `e6c984f` regression fix).
+- **Player exemption:** the main player iframe -- the largest iframe with a real, non-blank, non-srcdoc src -- and its container chain (`el.contains(playerIframe)`) are exempt from the high-z and viewport rules. video site's `watch-iframe` goes to z-index 2147483647 + position:fixed in fullscreen, the SAME max z as ad injectors; killing it caused black screen with audio + dead seek bridge (the `e6c984f` regression fix).
 - **Control protection:** any element containing `button, [role=button], input, select` is never killed (iframe ads are opaque to querySelector, so this check can't protect an iframe -- rule 1's area bound covers that).
-- **Text is not an ad signal.** The old text-matching rule killed movie synopses and page titles and hid the Play button inside Movy/CineJoy hero layers (31 `overlay_killed` events, all false positives). Never reintroduce it.
-- **Flixer runs the MINIMAL scan** (`killCatchers`): body's direct children + iframes only, cheap rules only, slow interval, **no MutationObserver** -- the full-DOM `querySelectorAll('div, span, a, iframe')` walk crashes the PowerVR GPU during flixer's intro animation. This is the general pattern for any DOM work on flixer: restricted element set, cheap rules, slow interval, no observer.
-- **`reactOnClick` (Coreflix/vidcore buttons):** the ad script suppresses synthetic clicks after pointerup, so the workaround invokes React's onClick handler directly -- deferred to a 300 ms `setTimeout` after pointerup, cancelled by a document-level capture-phase `click` listener if a real click fires first. Without the deferral, a real click + direct call double-activates (play->pause, menu flashes then closes).
+- **Text is not an ad signal.** The old text-matching rule killed movie synopses and page titles and hid the Play button inside video site/lazy-load poster site hero layers (31 `overlay_killed` events, all false positives). Never reintroduce it.
+- **poster-grid site runs the MINIMAL scan** (`killCatchers`): body's direct children + iframes only, cheap rules only, slow interval, **no MutationObserver** -- the full-DOM `querySelectorAll('div, span, a, iframe')` walk crashes the PowerVR GPU during poster-grid site's intro animation. This is the general pattern for any DOM work on poster-grid site: restricted element set, cheap rules, slow interval, no observer.
+- **`reactOnClick` (video site/vidcore buttons):** the ad script suppresses synthetic clicks after pointerup, so the workaround invokes React's onClick handler directly -- deferred to a 300 ms `setTimeout` after pointerup, cancelled by a document-level capture-phase `click` listener if a real click fires first. Without the deferral, a real click + direct call double-activates (play->pause, menu flashes then closes).
 - `floating_seen` recon log stays for popups that slip through; any `floating_seen` with z >= 1,000,000 is a popup that got through -- investigate.
 
 **Invariants:** hash-protected (`tests/protected-fixes.json`) -- any edit requires updating the stored hash. The ad network injects based on accumulated session/cookies, so popups may not reproduce in a fresh session; verify kill logic with a synthetic high-z element if the real popup won't appear.
@@ -258,18 +258,18 @@ Each section: **what it does -> where it lives -> the contract -> invariants -> 
 
 ### 2.7 Image guard (flixer_image_guard.js)
 
-**What:** cuts GPU texture load on poster-heavy sites (flixer, cinejoy) by virtualizing off-screen TMDB posters (src-stripping) and firewalling off-allowlist image requests (1x1 responses via native `shouldInterceptRequest`).
+**What:** cuts GPU texture load on poster-heavy sites (poster-grid site, lazy-load poster site) by virtualizing off-screen TMDB posters (src-stripping) and firewalling off-allowlist image requests (1x1 responses via native `shouldInterceptRequest`).
 
-**Where:** `flixer_image_guard.js` (JS), `shouldInterceptRequest` + `onImageGuardedPage` (native), `isImageGuardedHost()` (single source of truth: flixer + cinejoy).
+**Where:** `flixer_image_guard.js` (JS), `shouldInterceptRequest` + `onImageGuardedPage` (native), `isImageGuardedHost()` (single source of truth: poster-grid site + lazy-load poster site).
 
 **Contract:**
 - Host gate: `/(^|\.)(flixer\.(gd|su))|(^|\.)(cinejoy\.pk)$/` -- JS and native must agree; `isImageGuardedHost()` is the native side of that agreement.
-- `virtualize()` strips `src` from off-screen TMDB posters so the browser never requests/decodes them; called at the top of `sync()` (wired 2026-10-21, `1bc1ecd` -- before that it was dead code and the 09:33 flixer crash proved the 1x1 firewall alone does NOT prevent the PowerVR bug).
-- `sync()` runs on a 2 s interval + IntersectionObserver (200 px margin) + MutationObserver (childList+subtree) -- **on flixer this is the mitigation, not a risk**: it reduces GPU texture load.
+- `virtualize()` strips `src` from off-screen TMDB posters so the browser never requests/decodes them; called at the top of `sync()` (wired 2026-10-21, `1bc1ecd` -- before that it was dead code and the 09:33 poster-grid site crash proved the 1x1 firewall alone does NOT prevent the PowerVR bug).
+- `sync()` runs on a 2 s interval + IntersectionObserver (200 px margin) + MutationObserver (childList+subtree) -- **on poster-grid site this is the mitigation, not a risk**: it reduces GPU texture load.
 - The guard reduces crash probability; it does **not** prevent the vendor PowerVR driver bug. The watchdog crash-recovery remains the safety net.
-- CineJoy uses native `loading="lazy"` + real `<img>` TMDB tags, so the benefit there is modest (lazy-loading already defers most off-screen images) -- verified: 373 off-screen posters src-stripped, 26 loaded.
+- lazy-load poster site uses native `loading="lazy"` + real `<img>` TMDB tags, so the benefit there is modest (lazy-loading already defers most off-screen images) -- verified: 373 off-screen posters src-stripped, 26 loaded.
 
-**Invariants:** keep the guard flixer/cinejoy-only. Extending it changes behavior on every site (lazy-load detectors, load-event reporting) -- it was tried, reverted, and the user must approve any extension.
+**Invariants:** keep the guard poster-grid site/lazy-load poster site-only. Extending it changes behavior on every site (lazy-load detectors, load-event reporting) -- it was tried, reverted, and the user must approve any extension.
 
 **Verify:** `image_firewall` / `flixer_image_firewall` (`active`, `allowlistSize`), `tmdb_allowlist_sync` (count), `tmdb_image_blocked`; `dumpsys meminfo com.buccaneer.browser | grep Graphics` for GPU texture memory.
 
@@ -281,7 +281,7 @@ Each section: **what it does -> where it lives -> the contract -> invariants -> 
 
 **Contract:**
 - The virtual cursor **parks** a persistent mouse pointer in the WebView (HOVER_ENTER/HOVER_MOVE, never HOVER_EXIT) -- the browser keeps the pointer at the last position forever.
-- Pointer-aware players (Movy's `PlayerUIProvider`: controls stay visible while `paused || loading || popups || seeking || isPointerOverUI`) treat a parked pointer over their control area as "user is interacting" and pin the controls visible -- symptom: "controls hide the first time, not the second".
+- Pointer-aware players (video site's `PlayerUIProvider`: controls stay visible while `paused || loading || popups || seeking || isPointerOverUI`) treat a parked pointer over their control area as "user is interacting" and pin the controls visible -- symptom: "controls hide the first time, not the second".
 - **The fix (`217a88a`): `liftPointerIfPlaying()`** sends `ACTION_HOVER_EXIT` when the cursor idles (`hideCursorRunnable`) or is explicitly hidden, **but only while video plays** (fresh `playbackHeartbeatAt` < 12 s). While browsing, the parked pointer is what keeps hover menus open while the user reads them -- it must stay.
 - HOVER_EXIT generates no mousemove, so it cannot re-trigger YouTube's show-on-activity.
 - `MotionEvent.obtain` has no 3-arg (downTime, eventTime, action) overload -- use the 6-arg form with the cursor coords.
@@ -295,7 +295,7 @@ Each section: **what it does -> where it lives -> the contract -> invariants -> 
 **What:** a bounded synthetic mousemove poke that kicks stuck player idle-timers.
 
 **Contract:**
-- Synthetic mousemove does **not** trigger autohide on players that ignore untrusted events (`isTrusted === false`) -- verified on CineJoy.
+- Synthetic mousemove does **not** trigger autohide on players that ignore untrusted events (`isTrusted === false`) -- verified on lazy-load poster site.
 - But it **does** re-wake show-on-activity players (YouTube shows controls on ANY pointer activity, hides after ~3 s idle). A continuous 1.5 s poke perpetually re-shows YouTube controls.
 - **The bound is the general rule: poke ~3 times, then stop.** It kicks the idle timer on stuck-control players (a few pokes are enough to start it) and stops interfering with auto-hiding ones. Continuous poking is wrong for all three player types.
 - Because the poke runs on every site, a change to it can fix one player type while regressing another -- regression-check on a second site with a different player type before committing.
@@ -366,14 +366,14 @@ Each section: **what it does -> where it lives -> the contract -> invariants -> 
 
 **Where:** `StartPage.kt` (300 L), `showStartPage`, the `startPage` handler branch in key routing.
 
-**Contract:** the start page is a native view (not a web page) shown over the webView at launch and after double-Back. Navigation from it goes through `navigateUrl`. `flixer_render_reset` logs when leaving flixer back to the start page (renderer state reset).
+**Contract:** the start page is a native view (not a web page) shown over the webView at launch and after double-Back. Navigation from it goes through `navigateUrl`. `flixer_render_reset` logs when leaving poster-grid site back to the start page (renderer state reset).
 
 ### 2.15 Dark mode, UA, navigation policy
 
 **Dark mode (2.3.1 design -- do not regress):**
 - `darkMode` defaults to **true** (MainActivity L334), read from `settings.xml` in onCreate.
 - Applied via **Chromium native force-dark**: `WebSettingsCompat.setForceDark(FORCE_DARK_ON)` + algorithmic darkening (`applyDarkMode`, L3572+), logging `dark_mode_applied`.
-- `injectDarkMode(view)` (L841) is a **deliberate no-op** with a warning comment: every attempt to force dark via CSS injection (style tag, color-scheme override) broke flixer with a PowerVR SIGSEGV (`KEGLReleaseRenderTarget`). fmhy stays light. **Do NOT add any `evaluateJavascript` style injection there.** (The old 1.9.x "two injection sites with filter:invert" design is gone -- do not restore it.)
+- `injectDarkMode(view)` (L841) is a **deliberate no-op** with a warning comment: every attempt to force dark via CSS injection (style tag, color-scheme override) broke poster-grid site with a PowerVR SIGSEGV (`KEGLReleaseRenderTarget`). SPA portal stays light. **Do NOT add any `evaluateJavascript` style injection there.** (The old 1.9.x "two injection sites with filter:invert" design is gone -- do not restore it.)
 - page_helpers.js L26 documents the same: dark mode is the WebView's native force-dark, not page CSS.
 
 **User agent:** `desktopSite` toggle swaps between the default (Amazon TV) UA and a built desktop UA (`buildDesktopUa` -- Chrome version parsed from the real UA). It changes reported identity only; it does not make the engine match (see the Turnstile limitation in Part 6).
@@ -397,7 +397,7 @@ This is the answer to "what happens when I change X". Rows = the thing you chang
 | **popup_guard.js kill rules** | L | L | H (player exemption) | M (dead seek bridge if player killed) | -- | L | L | L |
 | **flixer_image_guard** | L | L | L | L | L | -- | L | L |
 | **Cursor hover / pointer lift** | M (tap dispatch) | L | H (controls autohide) | L | L | L | -- | M (heartbeat gate) |
-| **Pointer poke bound** | L | L | H (YouTube vs CineJoy) | L | L | L | M | L |
+| **Pointer poke bound** | L | L | H (YouTube vs lazy-load poster site) | L | L | L | M | L |
 | **OSD hit-test** | H (seek vs tap) | L | M (fullscreen OSD) | H (seek fraction) | L | L | L | L |
 | **SeekRepeatPolicy** | L | L | L | -- | L | L | L | L |
 | **Fullscreen intercept (JS)** | L | L | -- | M (auto-resume) | L | L | M | L |
@@ -410,7 +410,7 @@ This is the answer to "what happens when I change X". Rows = the thing you chang
 1. **Key handling <-> everything.** One decision tree serves browse, fullscreen, keypad, OSD, menus. Any branch change re-routes keys in other states. Past regressions: ENTER-as-press vs ENTER-as-submit (fixed 2026-10-18 by the GO-key check in `Keypad.handleKey`); transport keys consumed by the OSD seek bar (by design -- `tapAtCursor` hit-tests first).
 2. **Focus <-> typing <-> IME.** Input focus is shared with the system IME (FireTVIME): synthetic key events reach the page only while the WebView holds focus; focusing a text field hands focus to the IME, so injected typing and ENTER get eaten. `TvWebView.onCheckIsTextEditor() = false` is what keeps the system keyboard out. Check live state with `dumpsys input_method | grep -iE 'mCurFocusedWindow|mInputShown'` before blaming the keypad.
 3. **Pointer state <-> player autohide.** The parked pointer (2.8) and the poke (2.9) both write pointer state that players read. A change to either can fix one player type and break another -- the bound (3 pokes) and the playing-only lift are the two load-bearing numbers.
-4. **DOM walkers <-> GPU.** popup_guard's full walk and the image guard's img walk are the only continuous DOM work. On flixer they are restricted (minimal scan, 2 s sync) because the full walk crashed PowerVR during the intro animation. Any new DOM work must follow the flixer pattern: restricted element set, cheap rules, slow interval, no observer.
+4. **DOM walkers <-> GPU.** popup_guard's full walk and the image guard's img walk are the only continuous DOM work. On poster-grid site they are restricted (minimal scan, 2 s sync) because the full walk crashed PowerVR during the intro animation. Any new DOM work must follow the poster-grid site pattern: restricted element set, cheap rules, slow interval, no observer.
 5. **Async callbacks <-> page generation.** Every eval result, posted runnable, and coalesced UI callback must check `pageEpoch`/`interactionSerial`. A new async path that skips the check is a future ghost-action bug.
 
 ### Regression history (fix-one-breaks-another timeline)
@@ -419,16 +419,16 @@ From git history + docs (verified in part6):
 
 | Date | Fix | What it broke | Resolution |
 |---|---|---|---|
-| 2026-10-16 | Extended image firewall beyond flixer | Coreflix quality button stopped opening (off-screen image load events drive UI) | Reverted; guard stays flixer/cinejoy-only |
-| 2026-10-16 | flixer typing guard removed (tv_ui host return) | (risk) PowerVR intro crash could return | Accepted tradeoff; flixer now uses the identical typing path |
+| 2026-10-16 | Extended image firewall beyond poster-grid site | video site quality button stopped opening (off-screen image load events drive UI) | Reverted; guard stays poster-grid site/lazy-load poster site-only |
+| 2026-10-16 | poster-grid site typing guard removed (tv_ui host return) | (risk) PowerVR intro crash could return | Accepted tradeoff; poster-grid site now uses the identical typing path |
 | 2026-10-18 | ENTER/GO submit in keypad | -- | GO-key check in handleKey; label "ENTER" in page-edit, "GO" in prompts |
 | 2026-10-18 | `reactOnClick` direct React call | Double-activation when the real click also arrives (play->pause, menu flash) | 300 ms deferred timer + capture-click cancel |
-| 2026-10-20 | Cross-frame video command bridge | -- | `'frame'` = success; flixer excluded; `dispatchToPage` always webView |
+| 2026-10-20 | Cross-frame video command bridge | -- | `'frame'` = success; poster-grid site excluded; `dispatchToPage` always webView |
 | 2026-10-20 | CSS fullscreen intercept | (a) `webkitEnterFullscreen` on the wrong prototype; (b) area-walk heuristic returned bare body-child | Patch both prototypes; button-containing-ancestor primary signal |
 | 2026-10-21 | Text-based ad rule in popup_guard | Killed movie synopses/page titles, hid Play button (31 false positives) | Removed; structure-only rules |
-| 2026-10-21 | High-z kill rule (z >= 1,000,000) | Killed coreflix's fullscreen player iframe (same max z) -> black screen + dead seek bridge | Player-iframe + container-chain exemption (`e6c984f`) |
+| 2026-10-21 | High-z kill rule (z >= 1,000,000) | Killed video site's fullscreen player iframe (same max z) -> black screen + dead seek bridge | Player-iframe + container-chain exemption (`e6c984f`) |
 | 2026-10-21 | Parked pointer pinned player controls | "Controls hide the first time, not the second" | `liftPointerIfPlaying()` -- HOVER_EXIT only while playing (`217a88a`) |
-| 2026-10-21 | TMDB virtualize() wired into sync() | -- | Off-screen posters src-stripped; guard extended to cinejoy (`1bc1ecd`) |
+| 2026-10-21 | TMDB virtualize() wired into sync() | -- | Off-screen posters src-stripped; guard extended to lazy-load poster site (`1bc1ecd`) |
 | 2026-10-20 | (crash) "child already has a parent" x2 | app restart (watchdog) | Open issue -- see Part 8 |
 
 **The pattern:** almost every regression came from a rule that was true for the site being fixed but not for another site (text = ad? max-z = ad? full-DOM walk = safe? continuous poke = helpful?). The general rule: **any rule that classifies page content must be structure-scoped, host-scoped where the problem is host-specific, and tested on a second site with a different player type.**
@@ -445,15 +445,15 @@ Code that looks like patch-on-patch but is load-bearing. Removing or "simplifyin
 4. **The 2000 ms delayed eval in `onShowCustomView`** (synchronous eval there returns `"none"` -- the WebView is mid-transition).
 5. **Both prototypes patched** for the fullscreen intercept (`HTMLVideoElement` AND `HTMLMediaElement`, whichever has `webkitEnterFullscreen`; plus `document.webkitExitFullscreen`).
 6. **Button-containing-ancestor** as the primary player-container signal (area walk is fallback only).
-7. **Flixer exclusions:** fullscreen intercept excluded; popup_guard uses the minimal scan; no MutationObserver/full-DOM walks/continuous timers on flixer.
+7. **poster-grid site exclusions:** fullscreen intercept excluded; popup_guard uses the minimal scan; no MutationObserver/full-DOM walks/continuous timers on poster-grid site.
 8. **Player-iframe + container-chain exemption** in every high-z/viewport kill rule. A z-index threshold alone is NOT a safe ad signal.
 9. **Structure-only ad detection.** Text is not an ad signal.
 10. **300 ms deferred `reactOnClick`** + capture-click cancel. No DOM-walk `__buccaneerHandled` mark (broke all buttons except play/pause).
 11. **Pointer-lift only while playing** (fresh `playbackHeartbeatAt` < 12 s).
 12. **Poke bound ~ 3.** Continuous poking is wrong for every player type.
 13. **Field-identity recording on keyboard open** (`inputFrame` + `inputFieldId`); edit path checks `activeInputFrame()`.
-14. **`onPageCommitVisible`** as the page-ready signal (not `onPageFinished` -- unreliable on fmhy).
-15. **Image firewall scoped to `isImageGuardedHost()`** (flixer + cinejoy). `onFlixerPage` stays flixer-only.
+14. **`onPageCommitVisible`** as the page-ready signal (not `onPageFinished` -- unreliable on SPA portal).
+15. **Image firewall scoped to `isImageGuardedHost()`** (poster-grid site + lazy-load poster site). `onFlixerPage` stays poster-grid site-only.
 16. **Timer-based long-press** (500 ms), not key repeats. Key-up clears the pending flag before firing the short action.
 17. **`TvWebView.onCheckIsTextEditor() = false`** -- the system IME stays out of the typing path.
 18. **OSD hit-test before tap dispatch** in `tapAtCursor`.
@@ -506,7 +506,7 @@ Behavioral (each confirms a subsystem working on real sites):
 - `media_owner_started`/`stopped` (14 each, with frame id) -- media ownership tracking
 - `http_error` (1: toflix.co 429) -- rate-limit visibility
 - `user_navigation` (4: movy.sx) -- user-initiated navigations
-- `flixer_render_reset` (1, `from: www.movy.sx`) -- leaving flixer
+- `flixer_render_reset` (1, `from: www.movy.sx`) -- leaving poster-grid site
 
 ### 5.4 Crash forensics (from `diagnostic_critical.jsonl`)
 
@@ -525,7 +525,7 @@ Analysis: the only dynamic `addView` in the app is `fullscreenBox.addView(view)`
 3. **Cross-origin iframe opacity** -- a frame cannot reach into a cross-origin child's DOM/window. Players nested 2+ levels deep are controllable only via the postMessage bridge (if the frame runs our helper) or the player's own UI.
 4. **CDP from the host works** (raw-socket WebSocket, no Origin header, masked client frames) -- in-page inspection is available; the app's diagnostic JSONL is still the better tool for key-routing and app-side state.
 5. **Cloudflare Turnstile fingerprints the engine**, not just the UA -- the Fire TV WebView is Amazon's fork (`com.amazon.webview.chromium/118.amazon-webview-...-tv`); a UA override alone can't pass a live challenge. If the challenge script is alive, receives the click, runs ~10 s, then 403 -> the failure is at the solve/fingerprint stage.
-6. **`onPageFinished` unreliable on fmhy** -- use `onPageCommitVisible`.
+6. **`onPageFinished` unreliable on SPA portal** -- use `onPageCommitVisible`.
 7. **adb `input keyevent` codes are not what you expect on this device** (91->MUTE, 92->PAGE_UP, not media rewind) -- use the real remote or the diagnostic `key` events as ground truth.
 8. **`install --no-cache-data` unsupported on Android 7.1** -- the equivalent is `pm clear` + `install -r` (wipes data).
 9. **Debug APKs carry the DEBUGGABLE flag** -> Fire TV launcher icon quirk (icon disappears after install, returns after reboot); release builds lose `run-as` (no diagnostics, no data rescue).
@@ -585,9 +585,7 @@ Key calls: `Runtime.evaluate` (returnByValue, contextId), `Page.getFrameTree` (f
 |---|---|---|
 | Protected fixes | `python3 tests/check-protected-fixes.py` | **PASS** |
 | Warning repairs | `python3 tests/check-warning-repairs.py` | **FAIL (pre-existing)** -- stale 1.9.1 hardware-baseline hash for `flixer_image_guard.js`; dies at its line 13 before steps 5-11 run |
-| Node .cjs (seek-click, fmhy-theme, release18-script, seek-mapping-integration) | `node tests/<name>` | **PASS** |
-| Node .cjs (quality-tests, logic19-tests, quality199-startup, integration-pass-tests) | `node tests/<name>` | **FAIL (stale vs v2.x assets)** -- reference functions removed from the assets (`pickCapLevel`, `wrapHlsConstructor`, `capHls`, `capShaka`) |
-| cinejoy199-quality | -- | **CANNOT RUN** -- its asset `cinejoy_quality.js` was removed from the tree |
+| Node .cjs (seek-click, SPA portal-theme, release18-script, seek-mapping-integration, integration-pass) | `node tests/<name>` | **PASS** |
 | Headless-Chromium runners (5) + Playwright DOM tests (3) | -- | **CANNOT RUN here** -- no chromium/playwright in this environment |
 | Kotlin unit tests (15 classes) | `gradle test` (with `source <android-env>/env.sh`) | not run in this review; CI does not run them (builds release APK on tags only) |
 
@@ -627,7 +625,7 @@ Method: every concrete claim in the current docs was re-verified against the liv
 | `TESTING.md` | Current (added `480f62e`) | High. The interdependency map + per-site regression checklist. One gap: missing the `viewport_catcher` reason (S9.3). |
 | `SECURITY.md` | Current | Short; keystore/secret handling. |
 | `RELEASE_2.3.1_NOTES.md`, `RELEASE_2.2_NOTES.md` | Release notes | Verified claims: YouTube auto-hide skip v, `allowfullscreen` on player iframes v, start page 2x5=10 tiles v, minSdk 22 / targetSdk 33 v (build.gradle.kts). |
-| `docs/history/*` (31 files) | Historical (1.3 -> 1.9.3 era) | **Reference only.** Do not use for current behavior; several describe designs that were later removed (e.g. the two-site CSS dark-mode injection, repair199 baseline). |
+
 | `HANDOFF.md` (root, 2.2 era) | Superseded by HANDOFF-full-program.md | Use only for history. |
 
 ## 6.2 Verified claims (spot-checked, all PASS)
@@ -663,14 +661,14 @@ Method: every concrete claim in the current docs was re-verified against the liv
 `git status` shows two modified, **uncommitted** files (as of 2026-10-22):
 
 1. **`app/src/main/assets/popup_guard.js`** (+118/-8 lines, 434 -> 538):
-   - **New `viewport_catcher` rule** in `killOverlays`: a positioned element covering **>=90% of the viewport** at **z >= 1000** on a page where `covers_video` cannot fire (no `<video>` yet -- home/show/season/pre-roll pages). Targets ad injectors that use z=9999/1000 full-screen click catchers (seen on coreflix/nippleflix and movy, 2026-10-22). Player + its container chain exempt (`isPlayerChain`). New `overlay_killed` reason value: **`viewport_catcher`** (in addition to `floating_iframe` / `high_z_ad` / `covers_video`).
-   - **New `killCatchers()` -- minimal flixer scanner.** The full-DOM `killOverlays` walk (querySelectorAll over every div/span/a/iframe) triggers the PowerVR driver crash during flixer's intro, so the heavy scanner stays OFF on flixer -- but flixer still gets inline ad click-catchers that the `window.open` guard cannot catch. `killCatchers` scans **only body's direct children + iframes**, applies only the cheap rules (floating iframe ad; full-viewport catcher at z >= 1000), exempts the **main player iframe** (largest iframe with a real, non-blank, non-srcdoc src) and its container chain, and skips elements containing a `<video>` or real controls (`button, [role=button], input, select`). Runs immediately + every **5 s**, **no MutationObserver**.
-   - Host branch flipped: flixer -> `killCatchers` (5 s interval); all other hosts -> full `killOverlays` + debounced MutationObserver + slow interval (unchanged).
+   - **New `viewport_catcher` rule** in `killOverlays`: a positioned element covering **>=90% of the viewport** at **z >= 1000** on a page where `covers_video` cannot fire (no `<video>` yet -- home/show/season/pre-roll pages). Targets ad injectors that use z=9999/1000 full-screen click catchers (seen on video site/removed poster site and video site, 2026-10-22). Player + its container chain exempt (`isPlayerChain`). New `overlay_killed` reason value: **`viewport_catcher`** (in addition to `floating_iframe` / `high_z_ad` / `covers_video`).
+   - **New `killCatchers()` -- minimal poster-grid site scanner.** The full-DOM `killOverlays` walk (querySelectorAll over every div/span/a/iframe) triggers the PowerVR driver crash during poster-grid site's intro, so the heavy scanner stays OFF on poster-grid site -- but poster-grid site still gets inline ad click-catchers that the `window.open` guard cannot catch. `killCatchers` scans **only body's direct children + iframes**, applies only the cheap rules (floating iframe ad; full-viewport catcher at z >= 1000), exempts the **main player iframe** (largest iframe with a real, non-blank, non-srcdoc src) and its container chain, and skips elements containing a `<video>` or real controls (`button, [role=button], input, select`). Runs immediately + every **5 s**, **no MutationObserver**.
+   - Host branch flipped: poster-grid site -> `killCatchers` (5 s interval); all other hosts -> full `killOverlays` + debounced MutationObserver + slow interval (unchanged).
 2. **`tests/protected-fixes.json`** -- popup_guard.js hash updated to match the new file (the protected-fixes check still PASSES).
 
 **Consequences for future sessions:**
 - The "current" popup guard has **four** kill reasons: `floating_iframe`, `high_z_ad`, `viewport_catcher`, `covers_video`. TESTING.md and HANDOFF-full-program.md list only three -- update them when this delta is committed.
-- Any future popup-guard change must preserve: the flixer minimal-scan split (PowerVR), the player-iframe exemption (both scanners), the containsVideo/hasControls protections, and the `data-fslogged` once-per-element reconnaissance logging.
+- Any future popup-guard change must preserve: the poster-grid site minimal-scan split (PowerVR), the player-iframe exemption (both scanners), the containsVideo/hasControls protections, and the `data-fslogged` once-per-element reconnaissance logging.
 - **Commit this delta** (or consciously revert it) before the next release build -- a release built from the tree will ship it, but git history will not explain it.
 
 ## 6.4 Known doc gaps / corrections (for the next doc update)
@@ -679,7 +677,7 @@ Method: every concrete claim in the current docs was re-verified against the liv
 2. popup_guard.js line count 434 -> 538 (uncommitted delta, S9.3).
 3. `viewport_catcher` is a fourth `overlay_killed` reason not listed in TESTING.md/HANDOFF.
 4. README's "tap the on-screen seek bar" line is ambiguous: the *native* seek bar is display-only; the line refers to the player's in-page seek bar (or the OSD). Keep the distinction explicit in any rewrite.
-5. Historical docs (`docs/history/`) describe removed designs (CSS dark-mode injection, repair199 baseline, 1.9.x menu layout) -- treat as archaeology only.
+5. Historical designs (CSS dark-mode injection, repair199 baseline, 1.9.x menu layout) are no longer documented in this repository.
 
 ---
 
@@ -692,7 +690,7 @@ The exhaustive per-function analysis (every line of every file, with line number
 | `MainActivity.kt` lines 1-1350 (fields, lifecycle, WebView setup, Client/Chrome callbacks) | `docs/review/part1a-mainactivity.md` |
 | `MainActivity.kt` lines 1351-2699 (bridge tail, navigation, key routing, pointer/tap, video commands, OSD, fullscreen) | `docs/review/part1b-mainactivity.md` |
 | `MainActivity.kt` lines 2700-3956 (keypad, page-edit queue, menus, bookmarks, settings, diagnostics, watchdog) | `docs/review/part1c-mainactivity.md` |
-| `page_helpers.js` (the `__fb` bridge, cross-frame protocol, quality scanner, network probe, fullscreen intercept, flixer guard) | `docs/review/part2-page-helpers.md` |
+| `page_helpers.js` (the `__fb` bridge, cross-frame protocol, quality scanner, network probe, fullscreen intercept, poster-grid site guard) | `docs/review/part2-page-helpers.md` |
 | `tv_ui.js` / `seek_click.js` / `fmhy_theme.js` | `docs/review/part2b-tv-ui.md` |
 | `popup_guard.js` / `flixer_image_guard.js` (kill rules, thresholds, PowerVR risk) | `docs/review/part3-guards.md` |
 | `DiagnosticLog.kt` / `Keypad.kt` / `Osd.kt` / `CursorView.kt` / `TvWebView.kt` / `NativePageEditor.kt` | `docs/review/part4a-support.md` |
@@ -708,8 +706,8 @@ The exhaustive per-function analysis (every line of every file, with line number
 | `MainActivity.kt` | 3956 | God class: lifecycle, key routing, both bridges, WebView clients, navigation, fullscreen, video commands, OSD, cursor, keypad, page-edit queue, menus, bookmarks, settings, diagnostics, watchdog wiring |
 | `page_helpers.js` | 1911 | `__fb` bridge in every frame: video state/commands, cross-frame postMessage forwarding, quality scanner, network probe, CSS-fullscreen intercept, pointer poke, media health |
 | `tv_ui.js` | 335 | `__tvUi` bridge: field reporting/editing protocol, menu fitting, playback probe |
-| `popup_guard.js` | 538 (uncommitted) | Ad/popup suppression: window.open block, target=_blank rewrite, overlay kill rules (4 reasons), flixer minimal scanner, reactOnClick workaround |
-| `flixer_image_guard.js` | 286 | TMDB poster virtualization on flixer + cinejoy; 1x1 firewall coordination |
+| `popup_guard.js` | 538 (uncommitted) | Ad/popup suppression: window.open block, target=_blank rewrite, overlay kill rules (4 reasons), poster-grid site minimal scanner, reactOnClick workaround |
+| `flixer_image_guard.js` | 286 | TMDB poster virtualization on poster-grid site + lazy-load poster site; 1x1 firewall coordination |
 | `seek_click.js` | 72 | Seek-bar click repair, called on demand from Java |
 | `fmhy_theme.js` | 23 | fmhy.net theme class toggles |
 | `DiagnosticLog.kt` | -- | JSONL session log: rotation, queue, redaction, critical events, zip export |

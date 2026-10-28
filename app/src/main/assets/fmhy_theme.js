@@ -1,4 +1,4 @@
-// FMHY's own theme only: no filters or changes to other origins/WebView darkening.
+// the SPA portal's own theme only: no filters or changes to other origins/WebView darkening.
 (function () {
   'use strict';
   var host = (location.hostname || '').toLowerCase().replace(/\.$/, '');

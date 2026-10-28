@@ -43,11 +43,11 @@ Each fix is locally correct but globally destabilizing, because the fixes are **
 
 **The fix:** `page_helpers.js` `installControlsAutoHide` — in CSS fullscreen, dispatch a synthetic `mousemove` on the video (bounded: 2 pokes at 1.5s) to kick-start the player's idle timer, which a TV remote never triggers.
 
-**Intended effect:** controls auto-hide in fullscreen (MovY/Nova/CineJoy).
+**Intended effect:** controls auto-hide in fullscreen (video site/Nova/lazy-load poster site).
 
 **What actually happened:**
 - The auto-hide **did not work** — the player ignored the synthetic mousemove (controls stayed up). So the fix achieved nothing.
-- The video **went blank in fullscreen** on MovY.
+- The video **went blank in fullscreen** on video site.
 
 **Why the poke broke the video (hypothesis, not confirmed from log):**
 The synthetic `mousemove` is indistinguishable to the player's JS from a real pointer event. The player responds by re-running its "show controls" path — re-applying control-bar CSS, which forces a **GPU re-composite of the controls layer**. That re-composite, landing on top of residual GPU state, pushed the PowerVR over its compositing threshold → blank video.
@@ -58,12 +58,12 @@ The critical detail: **the poke added a GPU load (the re-composite) while produc
 
 **Resolution:** reverted the auto-hide change; re-pinned `page_helpers.js`; rebuilt and installed. Video recovered.
 
-## Worked example: MovY black video — NOT a GPU problem (2026-10-22)
+## Worked example: video site black video — NOT a GPU problem (2026-10-22)
 
 This is the counter-example that keeps the loop honest: **not every black video is a
 compositing/GPU failure.**
 
-**Symptom:** only *some* MovY videos went black; a different video played fine.
+**Symptom:** only *some* videos from the site went black; a different video played fine.
 
 **Diagnosis (from `blackvideo_diag.jsonl`):** the black videos' HLS segments failed at the
 network level — `Failed to fetch` + `Hls error` console errors, `net::ERR_FAILED`
@@ -105,8 +105,7 @@ navigation) before the next site's video composites.
 
 **Why it is safe:** it *removes* load rather than adding it, so it cannot tip another
 subsystem. It runs after media teardown, before the next page loads. Verified: 7
-`video_render_reset` in `test1_diag`, frame drops 0–3.5%, no buildup. User: "skipping is
-gone."
+`video_render_reset` in `test1_diag`, frame drops 0–3.5%, no buildup.
 
 **Rule:** when the failure is accumulation, the fix is to *clear* the accumulation at a
 boundary — not to add more work.
@@ -129,11 +128,11 @@ boundary — not to add more work.
   (directly toggling the player's idle state via JS, or a CSS-only approach that does not
   force a re-composite) — or defer. Still open.
 - **Dead-video retry unexercised:** the retry is installed and logging (`console.warn`) but
-  has not fired on a real black video. The next real MovY black video is the true test —
+  has not fired on a real black video. The next real video site black video is the true test —
   confirm a `[dead-video-retry] reloading:` line appears and the video then plays.
-- **Flixer fullscreen centering:** the `Gravity.CENTER` fix is kept; the residual
-  top-alignment on some flixer pages is a page-layout quirk (video top-aligned *inside* the
-  page/WebView, which gravity cannot reach). **Leave-it** by user decision — a CSS/JS
+- **poster-grid site fullscreen centering:** the `Gravity.CENTER` fix is kept; the residual
+  top-alignment on some poster-grid site pages is a page-layout quirk (video top-aligned *inside* the
+  page/WebView, which gravity cannot reach). **Leave-it** — a CSS/JS
   reposition carries the same regression risk that broke auto-hide.
 - **GPU budget:** what is the actual budget on this device? (We have symptoms, not a
   number.) Does the residual-state threshold drift with temperature / memory pressure over

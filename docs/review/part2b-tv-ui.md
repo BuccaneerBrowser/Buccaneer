@@ -171,7 +171,7 @@ IIFE, `'use strict'` (L3). Re-entrancy guard: `if (window.__tvUi) return;` (L4) 
 # seek_click.js — full file (lines 1–72)
 
 ## Purpose & contract
-- **Invoked imperatively by native code** as `seek_click(fx, fy, mode)` — an IIFE receiving `(fx, fy, mode)` (L3). Called **only after an explicit Flixer pointer click** (L1 comment). No install-time code, no listeners, no observers, no CSS, no timers (L1–2). Pure function: runs once, returns a string to the native caller.
+- **Invoked imperatively by native code** as `seek_click(fx, fy, mode)` — an IIFE receiving `(fx, fy, mode)` (L3). Called **only after an explicit poster-grid site pointer click** (L1 comment). No install-time code, no listeners, no observers, no CSS, no timers (L1–2). Pure function: runs once, returns a string to the native caller.
 - `fx`, `fy` are **normalized viewport coordinates** (0..1) — validated at L70: must be finite, `0<=fx<=1`, `0<=fy<=1`, else `'none'`.
 - `mode`: `'probe'` = detect only (returns `'track'` if a seek track is under the point, without seeking); any other value = perform the seek.
 - **Return values to native:** `'seeked'` (seek applied & verified), `'none'` (no track / not seekable / refused), `'track'` (probe: track found), `'frame'` (hit point is inside an iframe that couldn't be traversed — cross-origin or no `__tvUi`-style access).
@@ -211,7 +211,7 @@ IIFE, `'use strict'` (L3). Re-entrancy guard: `if (window.__tvUi) return;` (L4) 
   - L68: exception → `'none'`.
 
 ## Host conditions
-- **No hostname gating at all** — works on any page; host specificity comes from the player-widget heuristics (Video.js/JW/Plyr/native media controls) and the Flixer click that precedes the call.
+- **No hostname gating at all** — works on any page; host specificity comes from the player-widget heuristics (Video.js/JW/Plyr/native media controls) and the poster-grid site click that precedes the call.
 - Practical targets: any page with a recognized time slider under the click point.
 
 ## Timers/observers
@@ -231,7 +231,7 @@ IIFE, `'use strict'` (L3). Re-entrancy guard: `if (window.__tvUi) return;` (L4) 
 # fmhy_theme.js — full file (lines 1–23)
 
 ## Purpose
-Forces the FMHY site (a VitePress-based site) to follow the **app's** dark/light mode instead of the site's own default. Comment (L1): FMHY's own theme only — no filters, no effect on other origins or WebView-level darkening.
+Forces the SPA portal site (a VitePress-based site) to follow the **app's** dark/light mode instead of the site's own default. Comment (L1): SPA portal's own theme only — no filters, no effect on other origins or WebView-level darkening.
 
 ## Host condition (L4–5)
 - `host` = lowercased `location.hostname`, trailing dot stripped (L4).

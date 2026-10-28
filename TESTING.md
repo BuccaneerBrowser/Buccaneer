@@ -1,4 +1,4 @@
-# BuccaneerClaude — Regression Checklist & Subsystem Map
+# Buccaneer — Regression Checklist & Subsystem Map
 
 **Why this file exists.** We keep hitting the same failure loop: fix one thing,
 break another. The reason is that the features below **share code paths**
@@ -28,7 +28,7 @@ verified against the checklist, say so explicitly rather than claiming it works.
   *synthetic* (untrusted) Enter events. React handlers call `preventDefault()`
   on them, so the `proceed` flag is false. The submit path must therefore call
   `form.requestSubmit()` **regardless of `proceed`** when the field is in a
-  form. Re-gating submit on `proceed` re-breaks search (the nippleflix bug,
+  form. Re-gating submit on `proceed` re-breaks search (the removed poster site bug,
   fixed in `5434e6d`). See the note in `tv_ui.js`.
 - **2 (autohide) ↔ pointer/hover events.** The DPAD virtual cursor sends
   `HOVER_ENTER`/`HOVER_MOVE` but never `HOVER_EXIT`, so a player that hides
@@ -41,22 +41,22 @@ verified against the checklist, say so explicitly rather than claiming it works.
   does **not** hide the start page (only the app's own `navigateUrl` does), so
   test transport keys after a real app navigation.
 - **4 (popup guard) ↔ real page UI.** The kill rules must be specific enough to
-  spare real UI (the Movy/CineJoy hero layer carries a Play button and ad-like
+  spare real UI (the video site/lazy-load poster site hero layer carries a Play button and ad-like
   words in the synopsis — a text-based rule hid the Play button, fixed in
-  `f0d6c0f`) but broad enough to catch injected ads (the coreflix "baseball"
+  `f0d6c0f`) but broad enough to catch injected ads (the video site "baseball"
   popups used a 32-bit-max z-index on a page with no video, fixed in
   `066fec3`). The safe signals are structural: iframe + high-z + small,
   covers-video, or z-index ≥ 1,000,000 — never text content.
 - **5 (image guard) ↔ GPU stability.** The MutationObserver + interval scanner
-  is skipped on flixer because it triggers the PowerVR driver crash during the
-  intro animation. Do not re-enable a full-DOM scan on flixer.
+  is skipped on poster-grid site because it triggers the PowerVR driver crash during the
+  intro animation. Do not re-enable a full-DOM scan on poster-grid site.
 - **All ↔ PowerVR GPU.** Rapid page navigation on image-heavy pages has caused
   SIGSEGV crash-loops in the RenderThread/GPU. Navigate deliberately; if the app
   crash-loops, restart it and re-forward CDP before continuing.
 
 ## Regression checklist (run after every fix)
 
-Sites: flixer, cinejoy, nippleflix, coreflix, movy. (Add new sites here as they
+Sites: poster-grid site, lazy-load poster site, removed poster site, video site, video site. (Add new sites here as they
 are added to the bookmarks.)
 
 For **each site**, verify all three:
@@ -75,7 +75,7 @@ Plus, for the **popup guard** specifically:
    `covers_video`) and **no** lingering `floating_seen` for z ≥ 1,000,000.
 
 Plus, for the **image guard** specifically:
-5. On flixer/cinejoy poster grids, confirm in-view posters render and the app
+5. On the poster-grid and lazy-load poster grids, confirm in-view posters render and the app
    does not crash-loop during the intro animation.
 
 ### How to read the diagnostic log

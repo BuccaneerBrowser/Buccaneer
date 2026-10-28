@@ -3,8 +3,8 @@
 ## Header / install guard (1–31)
 - L1–10: File header comment. Declares the contract: runs in **every frame at document start**; app calls via `evaluateJavascript()` in the **top frame**. Video API: `togglePlay() play() pause() seek(sec) volume(delta) toggleMute() state() prepareFullscreen()` → returns `"ok" | "frame" | "none"`; plus `frameCenter()` (tap point for unscriptable player), `diag()` (Settings > Diagnostics). Typing API: `field() focusIntoView() clear()`. Also: reports to app when a real tap landed in a text field (auto-open keypad), and enforces "one video at a time".
 - L11–15: IIFE, `'use strict'`. Idempotence guard: `window.__fbInstalled` (L14–15) — second injection in same frame returns immediately.
-- L17–24: **Flixer host detection**: `__host` = lowercased `window.location.hostname` with trailing dot stripped (try/catch). `__isFlixer = /(^|\.)flixer\.(gd|su)$/.test(__host)` — matches `flixer.gd`, `flixer.su`, and any subdomain of either.
-- L17–21 comment: **Why flixer is excluded** — PowerVR GPU driver on this Fire TV crashes (SIGSEGV in `KEGLReleaseRenderTarget`) when the DOM observers, HLS hooks, and event listeners run alongside flixer's intro animation. On flixer-owned documents: **no continuous capture, no timers, no synthetic clicks**. The passive `__fb` API (video controls, typing) is still exposed.
+- L17–24: **poster-grid site host detection**: `__host` = lowercased `window.location.hostname` with trailing dot stripped (try/catch). `__isFlixer = /(^|\.)flixer\.(gd|su)$/.test(__host)` — matches `flixer.gd`, `flixer.su`, and any subdomain of either.
+- L17–21 comment: **Why poster-grid site is excluded** — PowerVR GPU driver on this Fire TV crashes (SIGSEGV in `KEGLReleaseRenderTarget`) when the DOM observers, HLS hooks, and event listeners run alongside poster-grid site's intro animation. On poster-grid site-owned documents: **no continuous capture, no timers, no synthetic clicks**. The passive `__fb` API (video controls, typing) is still exposed.
 - L26–29: Dark mode note: handled by WebView native `FORCE_DARK_ON` in `MainActivity.applyDarkMode()`. Explicit warning: do NOT inject `filter:invert()` on `<html>` — it crashed the PowerVR GPU process (`libGLESv2_POWERVR_ROGUE.so` SIGSEGV) and took down flixer.gd.
 - L31: `MIN_SIDE = 100` — min width/height (px) for an element to count as "visible".
 
@@ -19,7 +19,7 @@
 - L120–127 `countOpaqueFrames()`: count of visible opaque iframes (used later, e.g. diag).
 
 ## Target selection (129–182)
-- L129–133: Comment: remote-control priority — a playing video here wins; else a big cross-origin frame (embedded player) beats a small video (ad/banner). "Passive selected-player identity. No new Flixer listeners or timers."
+- L129–133: Comment: remote-control priority — a playing video here wins; else a big cross-origin frame (embedded player) beats a small video (ad/banner). "Passive selected-player identity. No new poster-grid site listeners or timers."
 - L133 `selectedTarget`: sticky selection cache `{video: el} | {frame: el} | null`.
 - L134–145 `attachedTarget(el)`: verifies element still attached to live document tree; walks up through `win.frameElement` chain (max 3 levels) verifying each frame element is visible and attached; returns true only if it reaches the top `window`. Guards against detached/removed players.
 - L146–156 `videoInFrame(frame)`: for a same-origin frame, finds best video inside (same scoring as findVideo, depth 2).
@@ -30,7 +30,7 @@
 - L186–190 comment: app can only script top frame; this helper runs in every frame; top frame forwards commands to the player frame's copy, which runs them and answers back. Works in fullscreen and normal.
 - L191 `frameCmdSeq`: monotonically increasing id for commands.
 - L192 `lastFrameState`: `{at: ms, state: {...}}` — newest state reported by a player frame.
-- L194–196 `frameIsFlixer(frame)`: tests `frame.src`'s host (split('/')[2]) against flixer regex.
+- L194–196 `frameIsFlixer(frame)`: tests `frame.src`'s host (split('/')[2]) against poster-grid site regex.
 - L198–204 `forwardToFrame(frame, cmd, arg)`: `frame.contentWindow.postMessage({__fbCmd: 1, id: frameCmdSeq, cmd, arg}, '*')`.
 - L207–251 `runOnVideo(v, cmd, arg)` — the command executor, returns 'ok'|'failed'|'none':
   - `togglePlay` (209–211): if paused/ended → `safePlay(v)`; else `cancelPlayAttempt()` + `v.pause()`.
@@ -44,13 +44,13 @@
 - L254–265 `frameCmd(cmd, arg)`: runs a command **in this frame** (invoked by the message listener): `pickTarget()`; video → `runOnVideo`; frame → forward one level down (`forwardToFrame` → returns 'frame' if sent, 'none' if not).
 - L267–328 **message listener** (`window.addEventListener('message', ...)`):
   - `m.__fbRes === 1` (270–274): a player frame answered one of our commands → store `lastFrameState = {at: Date.now(), state: m.state}` (keeps frame state fresh for `state()` merging).
-  - `m.__fbFs === 1 || m.__fbFsCmd === 1` (275–308): **CSS fullscreen protocol**. If `__isFlixer` → **return immediately** (Flixer keeps native fullscreen path; no CSS-fs handling at all).
+  - `m.__fbFs === 1 || m.__fbFsCmd === 1` (275–308): **CSS fullscreen protocol**. If `__isFlixer` → **return immediately** (poster-grid site keeps native fullscreen path; no CSS-fs handling at all).
     - `__fbFs` (child→parent notification, 277–299): child frame entered/exited CSS fullscreen; parent finds the iframe whose `contentWindow === e.source`; on `on===1`: sets `cssFs.frameChild = e.source`, `cssFsEnter(fr)` (make the iframe element itself CSS-fullscreen in parent), and if this window isn't top → `cssFsPostParent(true)` (bubble up). On exit: clears `frameChild`, exits if active, posts `__fbFs:1,on:0` back to child, bubbles to parent.
     - `__fbFsCmd` (ancestor→descendant command, 300–307): ancestor made this frame's element CSS-fullscreen; this frame enters/exits internally: `pickTarget()`; on → `cssFsEnter(cssFsTarget(t.video))`; off → `cssFsExit()`.
   - `m.__fbCmd !== 1` → return (309).
   - **Ancestor-source check** (310–319): accepts commands **only from an ancestor frame** — walks `parent` chain up to depth 6, requires `e.source === w` for some ancestor window. Never from sibling pages. If not from ancestor → ignore.
   - Reply (320–327): `reply(result)` posts `{__fbRes: 1, id: m.id, result, state: st}` to `parent`, where `st = JSON.parse(window.__fb.state())` — the frame's own current state snapshot. Executes `frameCmd(m.cmd, m.arg)`; on exception → reply('failed').
-- L334–345 `videoOp(cmd, arg)`: top-level command dispatcher (called by the `__fb` API): `pickTarget()`; video → `runOnVideo`; frame → **if not a flixer frame** and `forwardToFrame` succeeds → 'frame'; (flixer frames are NOT scripted — the app uses its trusted-tap path for flixer, L341 comment). If no target at all → 'frame' (L344: even with no target, returns 'frame' so the app falls back to tapping).
+- L334–345 `videoOp(cmd, arg)`: top-level command dispatcher (called by the `__fb` API): `pickTarget()`; video → `runOnVideo`; frame → **if not a poster-grid site frame** and `forwardToFrame` succeeds → 'frame'; (poster-grid site frames are NOT scripted — the app uses its trusted-tap path for poster-grid site, L341 comment). If no target at all → 'frame' (L344: even with no target, returns 'frame' so the app falls back to tapping).
 
 ## Play-block handling (347–358)
 - L349: `playBlockedAt` (ms timestamp), `playBlockedVideo` (the refused video), `playAttempt` (generation counter).
@@ -58,7 +58,7 @@
 - L351–358 `safePlay(v)`: calls `v.play()`; if it returns a promise, `.catch(refused)`; if it throws → refused. `refused` only records if the attempt is still current (generation match) and the video is still paused: sets `playBlockedAt = Date.now()`, `playBlockedVideo = v`. Purpose (L347–348 comment): when the browser refuses play() (no user gesture yet), the app can tap the player — a real tap is the user gesture the browser wants.
 
 ## CSS fullscreen subsystem (360–450)
-- L362–374 comment: **Why CSS fullscreen instead of native**: Chromium's native WebView FullScreenView draws a center play/pause button that stays on screen while paused. Instead: make the player container page-level CSS fullscreen (position:fixed over viewport, black bg); site's own player UI (auto-hides on idle) stays in charge; native FullScreenView never created → center button never drawn. Players like Clappr check `document.fullscreenElement` and listen for `fullscreenchange`, so both are faked: while active, `fullscreenElement` reports our element (patching happens later in file), and a synthetic `fullscreenchange` is dispatched on enter/exit. **Flixer keeps the native path** (its document returns early — see later in file).
+- L362–374 comment: **Why CSS fullscreen instead of native**: Chromium's native WebView FullScreenView draws a center play/pause button that stays on screen while paused. Instead: make the player container page-level CSS fullscreen (position:fixed over viewport, black bg); site's own player UI (auto-hides on idle) stays in charge; native FullScreenView never created → center button never drawn. Players like Clappr check `document.fullscreenElement` and listen for `fullscreenchange`, so both are faked: while active, `fullscreenElement` reports our element (patching happens later in file), and a synthetic `fullscreenchange` is dispatched on enter/exit. **poster-grid site keeps the native path** (its document returns early — see later in file).
 - L376 `cssFs` state: `{active, el, saved, frameChild, resumeTimer, wasPlaying}`.
 - L377 `__nativeFsFns = {}` — stash for original native fullscreen fns (patched later in file).
 - L379–384 `cssFsSave(el)`: saves inline style values+priorities for: position, left, top, right, bottom, width, height, margin, z-index, background, object-fit.
@@ -75,12 +75,12 @@
 - L462–473 `cssFsExit()`: no-op unless active; clears `active`, `el`, `resumeTimer`, `wasPlaying`; `cssFsRestore(el, saved)`; dispatches synthetic `fullscreenchange`; top frame → `cssFsNotifyApp(false)` (Java), else `cssFsPostParent(false)`.
 
 ## Controls auto-hide "pointer poke" (475–555)
-- L475–482 comment: player controls auto-hide on **pointer idle**; a TV remote is not a pointer, so on CineJoy-style sites the controls (and big center play/pause button) stay up forever. Fix: while video is fullscreen, dispatch a **synthetic mousemove on the video every 1.5 s** — same pointer activity a mouse would produce, triggering the player's own idle logic. No CSS/class changes. Pause button is a child of the control bar, hides with it. **Gated behind the flixer guard** (flixer's player must not get synthetic input).
+- L475–482 comment: player controls auto-hide on **pointer idle**; a TV remote is not a pointer, so on lazy-load poster site-style sites the controls (and big center play/pause button) stay up forever. Fix: while video is fullscreen, dispatch a **synthetic mousemove on the video every 1.5 s** — same pointer activity a mouse would produce, triggering the player's own idle logic. No CSS/class changes. Pause button is a child of the control bar, hides with it. **Gated behind the poster-grid site guard** (poster-grid site's player must not get synthetic input).
 - L483–555 `installControlsAutoHide()`: idempotent via `window.__fbAutoHideInstalled`.
   - `poke()` (488–519): finds the fullscreen video (fsElement, or first playing+visible video via `collect(document, 2, ...)`); dispatches `new MouseEvent('mousemove', {bubbles: true, cancelable: true, view, clientX/Y = video center, screenX/Y, button: 0, buttons: 0})` on the video.
-  - `schedule()` (520–540): **bounded pokes**: `maxPokes = 2`, interval 1500 ms. Comment (522–527): a few pokes start the idle timer on CineJoy-style players (controls stay up forever without pointer events); poking **continuously** would keep resetting the idle timer on MovieBite-style players that auto-hide on their own, so their controls never go away. Hence: poke a bounded number of times (2), then stop and let the player's own idle logic take over.
+  - `schedule()` (520–540): **bounded pokes**: `maxPokes = 2`, interval 1500 ms. Comment (522–527): a few pokes start the idle timer on lazy-load poster site-style players (controls stay up forever without pointer events); poking **continuously** would keep resetting the idle timer on MovieBite-style players that auto-hide on their own, so their controls never go away. Hence: poke a bounded number of times (2), then stop and let the player's own idle logic take over.
   - `onFsChange()` (541–552): on `fullscreenchange`/`webkitfullscreenchange` (capture phase, L553–554): if fullscreen element exists → `active=true`, `schedule()`, plus `setTimeout(poke, 600)` to hide controls right away; else clear timer.
-  - **Flixer exclusion**: the install call itself is guarded later in the file (see chunk 3) — the function exists in every frame but is only *installed* on non-flixer documents.
+  - **poster-grid site exclusion**: the install call itself is guarded later in the file (see chunk 3) — the function exists in every frame but is only *installed* on non-poster-grid site documents.
 
 ## Native fullscreen entry (557–568)
 - L557–568 `enterFullscreen(el)`: tries `el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen || el.mozRequestFullScreen || el.msRequestFullscreen` (call, swallow promise rejection); else if VIDEO with `el.webkitEnterFullscreen` (legacy WebKit video fullscreen) → call it.
@@ -103,15 +103,15 @@
   - **L652 `cssFullscreenActive()`**: returns 1 while CSS fullscreen is active, else 0.
   - **L653 `selectAt(fx, fy)`**: takes **fractions** (0..1) of screen, converts to px, calls the internal `selectAt` (tap-point player selection). Returns 'ok'|'frame'|'none'.
   - **L654 `focusTarget()`**: `pickTarget()`; focuses `t.frame || t.video`; returns 'frame' if it's a frame, 'ok' if a video, 'none' if no target/focus failed.
-  - **L655–660 `setDiagnosticLogging(enabled)`**: sets `diagnosticEnabled`; if **not flixer** and enabled → `scheduleHealthSample()` (immediate health sample); if not flixer and disabled → `clearTimeout(healthTimer)`. Returns 1/0. (Flixer never runs the health sampler.)
+  - **L655–660 `setDiagnosticLogging(enabled)`**: sets `diagnosticEnabled`; if **not poster-grid site** and enabled → `scheduleHealthSample()` (immediate health sample); if not poster-grid site and disabled → `clearTimeout(healthTimer)`. Returns 1/0. (poster-grid site never runs the health sampler.)
   - **L661–663 `togglePlay()`** → `videoOp('togglePlay')`.
   - **L665–667 `play()`** → `videoOp('play')`.
   - **L670–673 `playBlocked()`**: returns 1 if the browser refused a `play()` within the **last 1500 ms** AND the current target video is the blocked one AND it's still paused → the app should tap the player (real tap = user gesture).
-  - **L676–686 `pause()`**: pauses **every** video reachable in this document + same-origin iframes (depth 2) — also used when the app goes to background. Then if there's a big opaque frame that's **not flixer** → `forwardToFrame(f, 'pause')` → 'ok'. Returns 'ok' if local videos paused, 'frame' if only a frame existed, 'none' if nothing.
+  - **L676–686 `pause()`**: pauses **every** video reachable in this document + same-origin iframes (depth 2) — also used when the app goes to background. Then if there's a big opaque frame that's **not poster-grid site** → `forwardToFrame(f, 'pause')` → 'ok'. Returns 'ok' if local videos paused, 'frame' if only a frame existed, 'none' if nothing.
   - **L688–690 `seek(delta)`** → `videoOp('seek', delta)` (delta in seconds).
   - **L692–694 `volume(delta)`** → `videoOp('volume', delta)` (delta, e.g. ±0.1).
   - **L696–698 `toggleMute()`** → `videoOp('toggleMute')`.
-  - **L702–714 `unmute()`**: force-unmute — sets `muted=false` directly on every video in this document (player's own UI may be broken, e.g. cross-origin frame whose control script throws). If any changed → 'ok'. Else if target is a non-flixer frame → forward 'unmute' → 'frame'. Else 'none'.
+  - **L702–714 `unmute()`**: force-unmute — sets `muted=false` directly on every video in this document (player's own UI may be broken, e.g. cross-origin frame whose control script throws). If any changed → 'ok'. Else if target is a non-poster-grid site frame → forward 'unmute' → 'frame'. Else 'none'.
   - **L719–734 `muteButton()`**: where the player's mute button is, **as a fraction of the screen**: the **last visible button** in the player's control bar (mute is rightmost on most players). Used when the video is in a frame we cannot script: the app taps this spot. Returns JSON `{ok:0}` or `{ok:1, x, y}` (fractions).
   - **L737–765 `playerControls()`** (diagnostic): dumps the player's control bar structure. Finds the first `div/ul/nav` containing **3+** `button`/`[role="button"]` elements; returns JSON `{ok:1, barClass (≤80 chars), buttons: [{cls (≤50), aria, title, text (≤20), visible, x, y (px center)}]}`. If no bar with 3+ buttons → `{ok:0, note:'no control bar with 3+ buttons'}`.
   - **L772–816 `tapStack(x, y)`** (diagnostic): full element stack at a tap point via `document.elementsFromPoint` (frontmost first — first entry eats the tap). For each element: tag, id, cls (≤60), position, zIndex, pointerEvents, opacity, w/h, `coversVideo` (1 if it overlaps a ≥100×100 video), `isControl` (1 if inside/itself a button/[role=button]/.player-controls/.control/video). Returns JSON `{ok:1, x, y, topFrame, url (≤120), count, stack}`. Purpose: if the frontmost element isn't a control, something (an ad layer) covers the player UI — names the exact layer so `killOverlays()` can target it.
@@ -141,7 +141,7 @@
 - L989: `request = ++fullscreenRequest` (generation).
 - L990–1001: pick target: if target is a video in another frame → the iframe element (`win.frameElement`); else `playerContainer(v)`; if target is a frame → the frame. No target → 'none'.
 - L1004–1010: removes any old `#__fb_fs_overlay`; creates a new `<div id="__fb_fs_overlay">` with `position:fixed; left/top:0; width:100vw; height:100vh; z-index:2147483647; background:rgba(0,0,0,0.01)` (nearly transparent).
-- L1013–1034 `handler(e)`: on the first pointerup/touchend/mouseup/click (capture): `preventDefault`+`stopPropagation`; if generation stale → just remove. If not done: mark done; **if target is a flixer frame** → call the **native** `requestFullscreen`/`webkitRequestFullscreen` (from `__nativeFsFns`) on the target (Flixer keeps the native fullscreen path — trusted tap + PowerVR constraints); **else** → `enterFullscreen(target)` (which is intercepted → CSS fullscreen); and if target is a non-flixer IFRAME → post `{__fbFsCmd: 1, on: 1}` into it so the frame goes CSS-fullscreen internally (its player + fullscreen state match the now-fullscreen iframe). Then `setTimeout(remove, 500)`.
+- L1013–1034 `handler(e)`: on the first pointerup/touchend/mouseup/click (capture): `preventDefault`+`stopPropagation`; if generation stale → just remove. If not done: mark done; **if target is a poster-grid site frame** → call the **native** `requestFullscreen`/`webkitRequestFullscreen` (from `__nativeFsFns`) on the target (poster-grid site keeps the native fullscreen path — trusted tap + PowerVR constraints); **else** → `enterFullscreen(target)` (which is intercepted → CSS fullscreen); and if target is a non-poster-grid site IFRAME → post `{__fbFsCmd: 1, on: 1}` into it so the frame goes CSS-fullscreen internally (its player + fullscreen state match the now-fullscreen iframe). Then `setTimeout(remove, 500)`.
 - L1035–1038: listeners on the overlay: `pointerup`, `touchend`, `mouseup`, `click` (all capture).
 - L1039: append to body (or documentElement).
 - L1040: safety timeout — if no tap within **4000 ms**, remove the overlay.
@@ -166,7 +166,7 @@
   - Iterates **all `window` keys** (L1188): an object with `levels` array + `loadSource` function → HLS.js instance → `applyQualityHls`; an object with `getVariantTracks` + `load` function → Shaka → `applyQualityShaka`.
   - Also checks `window.shaka && window.shaka.player`: looks at `document.querySelector('video')` for `video.shakaPlayer || video.__shakaPlayer`; and common global names `['player','shakaPlayer','videoPlayer','streamPlayer']`.
   - Stops the interval once `found`.
-- L1232 comment: "(quality scan listener is registered after the flixer guard below)" — i.e. the actual `scanForQualityPlayers()` call / its trigger happens after the flixer early-return (see chunk 4).
+- L1232 comment: "(quality scan listener is registered after the poster-grid site guard below)" — i.e. the actual `scanForQualityPlayers()` call / its trigger happens after the poster-grid site early-return (see chunk 4).
 
 ## One-video-at-a-time setup + diagnostics init (1234–1268)
 - L1234–1238 comment: **one video at a time** — weak TV hardware has room for one video decoder; when a hidden preview, an ad and the real player all start together you get two soundtracks and a black picture. The app (through the `Buccaneer` bridge, present in every frame) says whether this is switched on and which frame started a real player last; every frame then stops its own media when another frame took over.
@@ -176,13 +176,13 @@
 - L1250–1254 `diagnosticEnabled`: initialized from `window.Buccaneer.isDiagnosticsEnabled()`.
 - L1256–1268: if diagnostics enabled, emit **`frame_script_alive`** once (proves the script is alive in this frame): payload `{url, topFrame: 0|1, hasVideo: 0|1}` via `b.diagnosticEvent('frame_script_alive', JSON.stringify(...))`.
 
-## FLIXER GUARD — the hard stop (1270–1275)
-- L1270–1274 comment: **Flixer: stop here.** The passive `__fb` API above is available for explicit Android-driven commands (video controls, typing). Everything below installs **continuous capture-phase event listeners, media health timers, HLS constructor hooks, and synthetic click forwarding** — all of which add GPU/CPU load that triggers the **PowerVR driver crash during flixer's intro animation**.
-- **L1275: `if (__isFlixer) return;`** — THE flixer guard. Everything below this line is **never installed on flixer**.
+## poster-grid site GUARD — the hard stop (1270–1275)
+- L1270–1274 comment: **poster-grid site: stop here.** The passive `__fb` API above is available for explicit Android-driven commands (video controls, typing). Everything below installs **continuous capture-phase event listeners, media health timers, HLS constructor hooks, and synthetic click forwarding** — all of which add GPU/CPU load that triggers the **PowerVR driver crash during poster-grid site's intro animation**.
+- **L1275: `if (__isFlixer) return;`** — THE poster-grid site guard. Everything below this line is **never installed on poster-grid site**.
 
-## Post-flixer installs (1277–1350)
-- L1277–1285: **Controls auto-hide install** (non-flixer only). `__isYouTube = /(^|\.)youtube\.com$|(^|\.)youtu\.be$/.test(__host)`. Comment (1280–1283): YouTube (and other show-on-activity players) do the OPPOSITE of hide-on-idle — any pointer activity re-shows controls, which hide after ~3 s. Our 1.5 s mousemove fires before that hide timer expires, so it would **perpetually re-wake YouTube's controls** (they never stay hidden). So the synthetic poke is **skipped on YouTube**; its own idle logic does the hiding. → `if (!__isYouTube) installControlsAutoHide();`
-- L1287–1290: **CSS fullscreen intercept** — replaces native fullscreen with CSS fullscreen so Chromium's native FullScreenView (and its persistent center button) is never created. Runs at document start, before page scripts; never on flixer (returned above).
+## Post-poster-grid site installs (1277–1350)
+- L1277–1285: **Controls auto-hide install** (non-poster-grid site only). `__isYouTube = /(^|\.)youtube\.com$|(^|\.)youtu\.be$/.test(__host)`. Comment (1280–1283): YouTube (and other show-on-activity players) do the OPPOSITE of hide-on-idle — any pointer activity re-shows controls, which hide after ~3 s. Our 1.5 s mousemove fires before that hide timer expires, so it would **perpetually re-wake YouTube's controls** (they never stay hidden). So the synthetic poke is **skipped on YouTube**; its own idle logic does the hiding. → `if (!__isYouTube) installControlsAutoHide();`
+- L1287–1290: **CSS fullscreen intercept** — replaces native fullscreen with CSS fullscreen so Chromium's native FullScreenView (and its persistent center button) is never created. Runs at document start, before page scripts; never on poster-grid site (returned above).
 - L1290–1304 `installCssFullscreenIntercept()` (IIFE, idempotent via `window.__fbFsIntercept`):
   - **Patches `window.Element.prototype`** (L1293) for names `['requestFullscreen','webkitRequestFullscreen','webkitRequestFullScreen','mozRequestFullScreen','msRequestFullscreen']`. For each that exists: stashes the original in `__nativeFsFns[n]`, replaces with a function that calls `cssFsEnter(cssFsTarget(this))` (returns a rejected promise if no target).
   - L1305–1326: **legacy media API**. Comment: players on Android try `video.webkitEnterFullscreen()` BEFORE `requestFullscreen()`, and on this WebView the method lives on **`HTMLVideoElement.prototype`** (`HTMLMediaElement.prototype` has none), so **both prototypes must be covered** or the player's first-choice path goes native. Iterates `[window.HTMLVideoElement, window.HTMLMediaElement]` prototypes: if `webkitEnterFullscreen` exists → stash in `__nativeFsFns.webkitEnterFullscreen`, replace with `cssFsEnter(cssFsTarget(this))`. If `webkitExitFullscreen` exists → stash, replace: if `cssFs.active` → `cssFsExit()`, else call the native one.
@@ -195,22 +195,22 @@
 - L1361: the whole document-state faking is in a try/catch — "if the document state cannot be faked, players may misbehave, but fullscreen itself still works".
 - L1362: end of `installCssFullscreenIntercept()` IIFE.
 
-## StreamCorner sandbox remover (1364–1430)
-- L1364–1367 comment: **StreamCorner** — remove `sandbox` attribute from player iframes **BEFORE they load**; the player checks its security context and refuses to play if sandboxed; must happen before the iframe navigates. `installSandboxRemover()` called.
+## cross-origin player site sandbox remover (1364–1430)
+- L1364–1367 comment: **cross-origin player site** — remove `sandbox` attribute from player iframes **BEFORE they load**; the player checks its security context and refuses to play if sandboxed; must happen before the iframe navigates. `installSandboxRemover()` called.
 - L1372–1430 `installSandboxRemover()` (idempotent via `window.__fbSandboxRemoverInstalled`):
   - **Hooks `document.createElement`** (L1377–1396): wraps it; when creating an `iframe`: immediately `removeAttribute('sandbox')`, sets `allowfullscreen="allowfullscreen"`, and appends `fullscreen` to the `allow` attribute if absent (element API requires this permission for cross-origin frames; without it the player's fullscreen button is a no-op). Emits `diagnostic('sandbox_removed_early', {url})` if diagnostics on.
   - `removeSandboxFromIframes()` (L1399–1420): queries `iframe[sandbox], iframe:not([allowfullscreen])`; for each: removes sandbox, adds allowfullscreen, adds `fullscreen` to `allow`; emits `diagnostic('sandbox_removed', {iframeSrc (≤100), url})`.
   - L1423–1426: runs immediately + on a **500 ms interval**, stops after **30 s** (iframes should be loaded by then).
   - L1429: also calls `installStreamCornerErrorHider()`.
 
-## StreamCorner error hider (1432–1465)
-- L1432–1433 comment: the StreamCorner player shows a "Remove sandbox attributes" error overlay **even when the video is playing**; hide it so the user can see the video.
+## cross-origin player site error hider (1432–1465)
+- L1432–1433 comment: the cross-origin player site player shows a "Remove sandbox attributes" error overlay **even when the video is playing**; hide it so the user can see the video.
 - L1434–1465 `installStreamCornerErrorHider()` (idempotent via `window.__fbScErrorHiderInstalled`):
   - `hideErrorOverlay()`: finds `[class*="error"], [class*="sandbox"], [id*="error"]` whose text matches `/sandbox|remove.*attribute/i` → `display:none`; emits `diagnostic('sc_error_hidden', {text (≤100)})`. Also finds `div[style*="position: absolute"]`/`position:absolute` overlays with the same text → hide; emits `diagnostic('sc_overlay_hidden', {text})`.
   - L1461–1464: runs immediately + **1000 ms interval**, stops after **60 s**.
 
 ## Quality scan trigger (1468–1501)
-- L1468–1470 comment: start quality preference scanning when a video element appears (player loading). **Registered after the flixer guard**: the interval scan adds CPU load that triggers the PowerVR driver crash during flixer's intro animation.
+- L1468–1470 comment: start quality preference scanning when a video element appears (player loading). **Registered after the poster-grid site guard**: the interval scan adds CPU load that triggers the PowerVR driver crash during poster-grid site's intro animation.
 - L1471–1501: `document.addEventListener('loadedmetadata', handler, true)` (capture). On any media `loadedmetadata`:
   - If `!qualityScanTimer` → `scanForQualityPlayers()` (starts the 1 s interval scan).
   - Emits `diagnostic('player_scan', {url, topFrame, hls: 0|1 (window.Hls is function), shaka: 0|1 (window.shaka defined), videoCount, iframeCount, windowKeys: up to 10 keys tagged ':hls'/':shaka'/':loadSource'})`.
@@ -241,7 +241,7 @@
 
 ## Diagnostics refresh + media events (1720–1788)
 - L1720 `geometryReported = false` — one-shot flag.
-- L1721–1726 `refreshDiagnostics()`: reads `bridgeCall('isDiagnosticsEnabled')`; if it's a boolean and differs from `diagnosticEnabled` → `window.__fb.setDiagnosticLogging(enabled)`. Comment: "Existing media events/coordination refresh the native flag in each frame. No new idle-frame bridge poll, timer, message channel or Flixer instrumentation."
+- L1721–1726 `refreshDiagnostics()`: reads `bridgeCall('isDiagnosticsEnabled')`; if it's a boolean and differs from `diagnosticEnabled` → `window.__fb.setDiagnosticLogging(enabled)`. Comment: "Existing media events/coordination refresh the native flag in each frame. No new idle-frame bridge poll, timer, message channel or poster-grid site instrumentation."
 - L1728–1738 `diagnosticMediaEvent(e)`: `refreshDiagnostics()`; if enabled and `isMedia(e.target)` → `diagnostic('media_' + e.type, mediaDescription(e.target))`. Also: **once**, when `e.type === 'playing'` and not yet reported → `diagnostic('player_geometry', window.__fb.playerGeometry())` (the frame hosting the video reports the video rect; the top frame reports the iframe rect).
 - L1740–1742 `isMedia(el)`: VIDEO or AUDIO.
 - L1744–1751 `playingMedia()`: all `video, audio` in this document that are not paused and not ended.
@@ -283,7 +283,7 @@
 - L1837: **`if (!e.isTrusted) return;`** — only genuine user taps (script-dispatched clicks are ignored).
 - L1838–1862: **tap forwarding into iframes** — comment: if the tap landed on the player iframe, forward it into the iframe; the page's own container can swallow touches that should reach the embedded player's controls. Finds the iframe (`e.target` or `e.target.closest('iframe')`); if the tap point is inside the iframe's rect: computes fractional position `fx, fy`; maps to the iframe's inner size (`innerWidth/innerHeight`); dispatches a synthetic `MouseEvent('click', {bubbles, cancelable, view: f.contentWindow, clientX/Y, screenX/Y})` on `doc.elementFromPoint(...)` (or documentElement). Cross-origin → caught/ignored (cannot forward).
 - L1863–1874: if `diagnosticEnabled` → emit **`diagnostic('click', {pageUrl, topFrame, target: tag+id, inPlayerUi: 0|1 (inside button/[role=button]/.player-controls/.control/video), x, y})`**.
-- L1875–1896: after **40 ms** (let focus settle): `ae = document.activeElement`; `ed = editableOf(ae)`. Comment (1879–1881): **only open the keypad when the tap actually landed on the field itself** — otherwise a tap on the player/video area can leave a chat box focused as a side effect and pop the keypad unexpectedly (StreamCorner chat, etc.). `onField` = `e.target === ed` OR `ed.contains(e.target)` OR (the tapped element's `closest('label')` contains `ed` — a label/wrapper around the field counts as a deliberate tap on it). If `ed && onField && window.Buccaneer.editableClicked` → **`window.Buccaneer.editableClickedForDocument(documentId)`** (tells Java to open the keypad).
+- L1875–1896: after **40 ms** (let focus settle): `ae = document.activeElement`; `ed = editableOf(ae)`. Comment (1879–1881): **only open the keypad when the tap actually landed on the field itself** — otherwise a tap on the player/video area can leave a chat box focused as a side effect and pop the keypad unexpectedly (cross-origin player site chat, etc.). `onField` = `e.target === ed` OR `ed.contains(e.target)` OR (the tapped element's `closest('label')` contains `ed` — a label/wrapper around the field counts as a deliberate tap on it). If `ed && onField && window.Buccaneer.editableClicked` → **`window.Buccaneer.editableClickedForDocument(documentId)`** (tells Java to open the keypad).
 
 ## Click-listener confirmation (1899–1910)
 - L1899–1910: if `diagnosticEnabled`, emit **`diagnostic('click_listener_registered', {url, topFrame})`** — confirms the click listener is registered in this frame.

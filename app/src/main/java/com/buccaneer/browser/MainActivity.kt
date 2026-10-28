@@ -420,6 +420,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var helpersJs = ""
     private var flixerImageGuardJs = ""
     private var flixerPosterGuardJs = ""
+    private var scrollRestoreJs = ""
 
     // TMDB image virtualization: allowlist of image URLs currently visible on a
     // guarded poster-grid host. When such a host is the active page,
@@ -428,25 +429,25 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     // avoid the PowerVR KEGLReleaseRenderTarget crash.
     @Volatile private var tmdbAllowlist: MutableSet<String> = mutableSetOf()
     @Volatile private var onFlixerPage = false
-    // True when the active page is a guarded poster-grid host (flixer or cinejoy)
+    // True when the active page is a guarded poster-grid host (the poster-grid site or the lazy-load poster site)
     // — i.e. the TMDB image firewall (allowlist + 1x1 backstop) is active.
     @Volatile private var onImageGuardedPage = false
 
     // Guarded poster-grid hosts: the TMDB image firewall is active on these.
-    // Flixer loads a ~180-poster intro burst; cinejoy lazy-loads a large grid.
+    // the poster-grid site loads a ~180-poster intro burst; the lazy-load poster site lazy-loads a large grid.
     // Both produce enough GPU texture churn to tip the PowerVR driver over.
     private fun isImageGuardedHost(host: String): Boolean {
         return host == "flixer.gd" || host.endsWith(".flixer.gd") ||
             host == "flixer.su" || host.endsWith(".flixer.su") ||
             host == "cinejoy.pk" || host.endsWith(".cinejoy.pk")
-        // nippleflix removed: its in-view posters didn't match the allowlist, so
-        // the native 1x1 firewall blanked the home-page grid (see flixer_image_guard.js).
+        // a poster site removed: its in-view posters didn't match the allowlist, so
+        // the native 1x1 firewall blanked the home-page grid (see the image guard script).
     }
 
-    // GPU render-reset: flixer crashes (KEGLReleaseRenderTarget) when loaded
-    // after a video site (coreflix/cinejoy) — residual video GPU state tips the
-    // PowerVR driver over the edge. Track the last non-flixer host so we can
-    // force a render reset when transitioning video-site -> flixer.
+    // GPU render-reset: the poster-grid site crashes (KEGLReleaseRenderTarget) when loaded
+    // after a video site (a video site/the lazy-load poster site) — residual video GPU state tips the
+    // PowerVR driver over the edge. Track the last non-poster-grid-site host so we can
+    // force a render reset when transitioning video-site -> the poster-grid site.
     @Volatile private var lastNonFlixerHost = ""
 
     // GPU render-reset (general): residual video GPU state accumulates across
@@ -471,14 +472,72 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var lastHoverAt = 0L
     private val hideCursorRunnable = object : Runnable {
         override fun run() {
-            // While a page is loading, keep the pointer visible so its loading bar stays on screen.
-            if (cursor.loading) {
+            // While a page is loading or blocked, keep the pointer visible so its loading
+            // bar / red X stays on screen.
+            if (cursor.loading || cursor.blocked) {
                 handler.postDelayed(this, 2000)
                 return
             }
             cursor.visibility = View.GONE
             liftPointerIfPlaying()
             hoverActive = false
+        }
+    }
+
+    // ---- "page visible but not interactive yet" (hydration) indicator
+    // The pointer turns into a red X from the first page_finished until the page is proven
+    // responsive. A trivial JS-eval round trip is the probe: it runs on the same page thread
+    // that queues taps, so it is delayed by exactly the same blocking. The X clears when:
+    //   - the probe shows a SUSTAINED fast streak of >= 3 s (a brief gap between hydration
+    //     tasks is not enough to clear the X). A 2nd page_finished is deliberately NOT used
+    //     as a settle signal: it can fire before the page is truly interactive (hydration
+    //     mismatch), which cleared the X early.
+    //   - a 20 s timeout.
+    private var pageFinishedCount = 0
+    private var cursorBlockedSince = 0L
+    private var fastStreakStart = 0L
+    private var lastFastProbeAt = 0L
+    private val cursorProbeRunnable = object : Runnable {
+        override fun run() {
+            if (!pageAvailable() || !cursor.blocked) return
+            val now = SystemClock.elapsedRealtime()
+            if (now - cursorBlockedSince > 20000) {
+                cursor.blocked = false
+                DiagnosticLog.record(this@MainActivity, "cursor_interactive", JSONObject().apply {
+                    put("signal", "timeout")
+                    put("sinceBlockedMs", now - cursorBlockedSince)
+                })
+                return
+            }
+            val t0 = now
+            try {
+                webView.evaluateJavascript("1") { _ ->
+                    if (!cursor.blocked) return@evaluateJavascript
+                    val dt = SystemClock.elapsedRealtime() - t0
+                    val now2 = SystemClock.elapsedRealtime()
+                    if (dt < 500) {
+                        // Extend (or start) the fast streak. A streak breaks if the gap
+                        // between fast probes exceeds 800 ms (a slow probe in between).
+                        if (lastFastProbeAt == 0L || now2 - lastFastProbeAt > 800) {
+                            fastStreakStart = now2
+                        }
+                        lastFastProbeAt = now2
+                        if (now2 - fastStreakStart >= 3000) {
+                            cursor.blocked = false
+                            DiagnosticLog.record(this@MainActivity, "cursor_interactive", JSONObject().apply {
+                                put("signal", "probe")
+                                put("dtMs", dt)
+                                put("sinceBlockedMs", now2 - cursorBlockedSince)
+                            })
+                        }
+                    } else {
+                        fastStreakStart = 0L
+                        lastFastProbeAt = 0L
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+            handler.postDelayed(this, 300)
         }
     }
 
@@ -592,6 +651,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         helpersJs = readAsset(this, "page_helpers.js")
         flixerImageGuardJs = readAsset(this, "flixer_image_guard.js")
         flixerPosterGuardJs = readAsset(this, "flixer_poster_guard.js")
+        scrollRestoreJs = readAsset(this, "scroll_restore.js")
         fmhyThemeJs = readAsset(this, "fmhy_theme.js")
         tvUiJs = readAsset(this, "tv_ui.js")
         seekClickJs = readAsset(this, "seek_click.js")
@@ -604,7 +664,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         webView.setBackgroundColor(Color.BLACK)
         if (softwareRendering) {
             // Software rendering avoids the PowerVR GPU driver crash (SIGSEGV in
-            // glBindFramebuffer) that hits certain pages (flixer) on this Fire TV.
+            // glBindFramebuffer) that hits certain pages (the poster-grid site) on this Fire TV.
             webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         }
         root.addView(webView, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -873,9 +933,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 // for verification compatibility and predictable site behavior.
                 WebViewCompat.addDocumentStartJavaScript(webView, guardJs, origins)
                 WebViewCompat.addDocumentStartJavaScript(webView, helpersJs, origins)
-                // Flixer TMDB image firewall. Registered at DOCUMENT START (not just on
-                // page commit) — this is the fix for the flixer PowerVR crash. The guard
-                // must observe the poster grid BEFORE flixer's own scripts append the
+                // the poster-grid site TMDB image firewall. Registered at DOCUMENT START (not just on
+                // page commit) — this is the fix for the poster-grid site PowerVR crash. The guard
+                // must observe the poster grid BEFORE the poster-grid site's own scripts append the
                 // ~180 TMDB posters, so its allowlist sync runs while the burst is
                 // happening. Injecting it only from onPageCommitVisible (via
                 // evaluateJavascript) ran too late: sync() saw count:0 (images not yet
@@ -884,11 +944,17 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 // start it runs in every frame before any page script, so it catches the
                 // burst as it happens: visible posters get real textures, the off-screen
                 // ones are served 1x1 pixels by shouldInterceptRequest. The script
-                // self-guards on the flixer host and is idempotent, so registering it
+                // self-guards on the poster-grid site host and is idempotent, so registering it
                 // for all origins is safe.
                 WebViewCompat.addDocumentStartJavaScript(webView, flixerImageGuardJs, origins)
+                // Scroll restore: some SPA portals call window.scrollTo(0,0) when hydration
+                // completes, yanking the user back to the top. Registered at document start
+                // (all origins) so it captures the native scrollTo before any page script and
+                // watches for the abrupt reset. Self-guarding and idempotent, so it is safe
+                // on every page.
+                WebViewCompat.addDocumentStartJavaScript(webView, scrollRestoreJs, origins)
                 scriptsAtDocumentStart = true
-                // An optional UI/theme failure must never prevent Flixer's intro fix.
+                // An optional UI/theme failure must never prevent the poster-grid site's intro fix.
                 try {
                     WebViewCompat.addDocumentStartJavaScript(webView, fmhyThemeJs, setOf("https://fmhy.net", "https://*.fmhy.net"))
                     WebViewCompat.addDocumentStartJavaScript(webView, tvUiJs, origins)
@@ -910,6 +976,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (!scriptsAtDocumentStart) {
             try { view.evaluateJavascript(guardJs, null) } catch (_: Throwable) { }
             try { view.evaluateJavascript(helpersJs, null) } catch (_: Throwable) { }
+            try { view.evaluateJavascript(scrollRestoreJs, null) } catch (_: Throwable) { }
         }
         if (!uiScriptsAtDocumentStart) {
             try { view.evaluateJavascript(fmhyThemeJs, null) } catch (_: Throwable) { }
@@ -920,7 +987,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     /**
      * Dark mode: handled entirely by Chromium's render-client darkening (FORCE_DARK_ON,
      * set in applyDarkMode). No CSS injection — injected style tags can trigger GPU
-     * compositing issues on the PowerVR driver (flixer crashes). fmhy (VitePress)
+     * compositing issues on the PowerVR driver (the poster-grid site crashes). The SPA portal (VitePress)
      * doesn't get darkened because it declares color-scheme in its CSS, which makes
      * Chromium skip render-client darkening. Known limitation. Called from both
      * onPageCommitVisible and onPageFinished. When dark mode is off, cleans up any
@@ -928,9 +995,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
      */
     private fun injectDarkMode(view: WebView?) {
         if (view == null) return
-        // NO CSS injection on any page. Every attempt to force fmhy dark
-        // (style tag, color-scheme override) has broken flixer — PowerVR GPU
-        // crash (SIGSEGV in KEGLReleaseRenderTarget). fmhy stays light.
+        // NO CSS injection on any page. Every attempt to force the SPA portal dark
+        // (style tag, color-scheme override) has broken the poster-grid site — PowerVR GPU
+        // crash (SIGSEGV in KEGLReleaseRenderTarget). The SPA portal stays light.
         // Dark mode is handled entirely by Chromium render-client darkening
         // (FORCE_DARK_ON + strategy 2 in applyDarkMode).
         // Do NOT add any evaluateJavascript style injection here.
@@ -1030,6 +1097,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             maybeBlockAdRedirect(url)
             injectFallback(view)
             cursor.loading = true
+            // New navigation: reset the hydration indicator and any in-flight probe.
+            cursor.blocked = false
+            pageFinishedCount = 0
+            fastStreakStart = 0L
+            lastFastProbeAt = 0L
+            handler.removeCallbacks(cursorProbeRunnable)
             if (!startPage.shown()) {
                 progress.fraction = 0.05f
                 progress.visibility = View.VISIBLE
@@ -1061,10 +1134,10 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     put("active", isFlixer)
                     put("allowlistSize", tmdbAllowlist.size)
                 })
-                // GPU render reset: flixer crashes (KEGLReleaseRenderTarget) when
+                // GPU render reset: the poster-grid site crashes (KEGLReleaseRenderTarget) when
                 // loaded after a video site — residual video GPU state tips the
                 // PowerVR driver over the edge. Force a render reset on the
-                // video-site -> flixer transition.
+                // video-site -> the poster-grid site transition.
                 if (isFlixer && lastNonFlixerHost.isNotEmpty()) {
                     DiagnosticLog.record(this@MainActivity, "flixer_render_reset", JSONObject().apply {
                         put("from", lastNonFlixerHost)
@@ -1081,7 +1154,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     } catch (_: Throwable) { }
                 }
             }
-            // Track the last non-flixer host for the render-reset trigger.
+            // Track the last non-poster-grid-site host for the render-reset trigger.
             if (!isFlixer && host.isNotEmpty()) {
                 lastNonFlixerHost = host
             }
@@ -1089,7 +1162,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (isImageGuarded) {
                 try { view?.evaluateJavascript(flixerImageGuardJs, null) } catch (_: Throwable) { }
             }
-            // Inject the poster hover-preview guard (flixer only). Keeps the
+            // Inject the poster hover-preview guard (the poster-grid site only). Keeps the
             // DPAD-focus-triggered floating preview hidden so the grid is
             // navigable; posters still open on click (DPAD OK -> movie page).
             if (isFlixer) {
@@ -1260,6 +1333,23 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             try { view?.evaluateJavascript(fmhyThemeJs, null) } catch (_: Throwable) {}
             cursor.loading = false
             progress.visibility = View.GONE
+            // The HTML is on screen, but the page's main thread may still be busy (e.g. a
+            // SPA hydrating), which queues clicks. Show the red X and probe until the page
+            // proves responsive. Only the first finish of a navigation starts the window; a
+            // later finish (hydration settling) does not restart it.
+            pageFinishedCount++
+            if (pageFinishedCount == 1 && url != null && url != "about:blank") {
+                cursor.blocked = true
+                cursorBlockedSince = SystemClock.elapsedRealtime()
+                fastStreakStart = 0L
+                lastFastProbeAt = 0L
+                handler.removeCallbacks(cursorProbeRunnable)
+                handler.postDelayed(cursorProbeRunnable, 300)
+                DiagnosticLog.record(this@MainActivity, "cursor_blocked_start", JSONObject().apply {
+                    put("url", DiagnosticLog.safeUrl(url))
+                    put("loadMs", loadMs)
+                })
+            }
             // Loading can finish before a delayed GPU crash. Keep the URL/time-window
             // retry budget; a page_finished callback is not evidence of stability.
             if (pendingClearHistory) {
@@ -1709,7 +1799,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         @JavascriptInterface
         fun activeOwner(): String = mediaOwner
 
-        /** Flixer image virtualization: JS syncs the allowlist of visible TMDB image URLs. */
+        /** the poster-grid site image virtualization: JS syncs the allowlist of visible TMDB image URLs. */
         @JavascriptInterface
         fun tmdbAllowlist(urls: String?) {
             val list = urls ?: "[]"
@@ -1884,13 +1974,13 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 // Script completion/timeout is NOT proof of native resource release.
                 DiagnosticLog.record(this, reason)
                 // GPU render reset (general): clear residual video GPU state when
-                // navigating away from a page that had real playback. The flixer
-                // reset in onPageCommitVisible only covers the video-site -> flixer
+                // navigating away from a page that had real playback. The the poster-grid site
+                // reset in onPageCommitVisible only covers the video-site -> the poster-grid site
                 // edge; this covers video-site -> video-site and video-site -> other,
                 // where residual state otherwise accumulates and degrades the next
                 // video (frame drops, black surface). Fires after media teardown,
                 // before the new page loads. Same proven pauseTimers/invalidate/
-                // resumeTimers dance as the flixer reset.
+                // resumeTimers dance as the poster-grid site reset.
                 if (videoActive) {
                     videoActive = false
                     DiagnosticLog.record(this, "video_render_reset")
@@ -1923,6 +2013,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         pendingClearHistory = true
         progress.visibility = View.GONE
         cursor.loading = false
+        cursor.blocked = false
+        handler.removeCallbacks(cursorProbeRunnable)
         hideCursor()
         startPage.show()
     }
@@ -2417,7 +2509,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         val y = cy
         if (webView.width > 0 && webView.height > 0) eval("window.__fb && __fb.selectAt ? __fb.selectAt(${x/webView.width},${y/webView.height}) : 'none'")
         if (onFlixerPage && customView == null && webView.width > 0 && webView.height > 0) {
-            // Preserve working Flixer button taps. Mouse input is only needed over a
+            // Preserve working poster-grid site button taps. Mouse input is only needed over a
             // recognized timeline, or inside an opaque player frame we cannot inspect.
             eval("($seekClickJs)(${x / webView.width},${y / webView.height},'probe')") { raw ->
                 if (!current()) return@eval
@@ -2427,7 +2519,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             }
         } else sendTap(x, y)
         showCursor()
-        // On-demand field reads also cover Flixer without adding any listeners or
+        // On-demand field reads also cover the poster-grid site without adding any listeners or
         // recurring instrumentation to its protected documents.
         for (delay in listOf(150L, 650L)) postForPage(delay) {
             if (!current()) return@postForPage
@@ -2440,7 +2532,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         handler.postDelayed({ hideIme() }, 300)
     }
 
-    /** One-shot fallback for identifiable seek tracks only; no Flixer listeners/timers/DOM styling. */
+    /** One-shot fallback for identifiable seek tracks only; no poster-grid site listeners/timers/DOM styling. */
     private fun repairSeekClick(x: Float, y: Float, interaction: Long = interactionSerial) {
         val width = webView.width
         val height = webView.height
@@ -2451,7 +2543,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         }
     }
 
-    /** Trusted native input: touch by default, mouse only for Flixer pointer/player clicks. */
+    /** Trusted native input: touch by default, mouse only for the poster-grid site pointer/player clicks. */
     private fun sendTap(x: Float, y: Float, mouse: Boolean = false) {
         if (!pageAvailable() || !foreground) return
         val epoch = pageEpoch
@@ -2508,7 +2600,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
 
     /**
      * Lift the simulated mouse pointer out of the page. The browser keeps the pointer parked at
-     * the last hover position and never tells the page it is gone, so pointer-aware players (Movy)
+     * the last hover position and never tells the page it is gone, so pointer-aware players (a video site)
      * see "pointer over the controls" forever and pin their controls visible. Lifting only while
      * video plays: while browsing, the parked pointer is what keeps hover menus open while the
      * user reads them, so it must stay.
@@ -2655,7 +2747,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     /**
      * Runs a page_helpers.js video command. It answers "ok", "frame" (the player lives in a
      * frame from another site; that frame's own copy of the helper ran the command — except on
-     * Flixer, which keeps the trusted-tap path), or "none" (no player found; send the key).
+     * the poster-grid site, which keeps the trusted-tap path), or "none" (no player found; send the key).
      */
     private fun videoCommand(call: String, fallbackKey: Int, tapFrame: Boolean = false) {
         cancelPlayerWork()
@@ -2666,7 +2758,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             when (jsString(raw)) {
                 "ok" -> if (tapFrame) postForPage(350) { if (intent == playerIntent && target === (customView ?: webView)) retryIfPlayRefused() }
                 "frame" -> if (tapFrame && fallbackKey == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE && onFlixerPage) {
-                    // Flixer's player frame is not scripted: a real tap starts and toggles it.
+                    // the poster-grid site's player frame is not scripted: a real tap starts and toggles it.
                     tapPlayerFrame(mouse = true)
                 }
                 // "frame" on any other site: the frame's own helper already ran the command.
@@ -3889,10 +3981,10 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         try {
             // VERIFIED WORKING: FORCE_DARK_ON + strategy 2
             // (PREFER_WEB_THEME_OVER_USER_AGENT_DARKENING). This is the configuration
-            // where flixer loads without crashing and coreflix buttons work.
-            // Omitting setForceDarkStrategy (the render-client default) breaks flixer.
-            // fmhy stays light (VitePress color-scheme) — do NOT inject CSS to fix it.
-            // Every fmhy dark-mode attempt has crashed flixer's PowerVR GPU.
+            // where the poster-grid site loads without crashing and a video site buttons work.
+            // Omitting setForceDarkStrategy (the render-client default) breaks the poster-grid site.
+            // The SPA portal stays light (VitePress color-scheme) — do NOT inject CSS to fix it.
+            // Every SPA portal dark-mode attempt has crashed the poster-grid site's PowerVR GPU.
             if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
                 WebSettingsCompat.setForceDark(s, if (darkMode) WebSettingsCompat.FORCE_DARK_ON else WebSettingsCompat.FORCE_DARK_OFF)
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {

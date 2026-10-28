@@ -5,3 +5,6 @@ local.properties
 *.jks
 # Local working docs (contain machine-specific paths/IPs) — never push
 docs/audit-2026-10-23.md
+docs/ROADMAP_TODO.md
+# Changelog references specific sites — keep in dev dir only, never push
+CHANGELOG.md

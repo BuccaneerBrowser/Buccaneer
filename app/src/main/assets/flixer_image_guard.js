@@ -1,5 +1,5 @@
 /*
- * TMDB image firewall — JS half (flixer + cinejoy).
+ * TMDB image firewall — JS half (the poster-grid site + the lazy-load poster site).
  *
  * Registered as a DOCUMENT-START script in MainActivity.installScripts()
  * (WebViewCompat.addDocumentStartJavaScript, all origins). It must run in every
@@ -11,7 +11,7 @@
  *
  * Chromium 118 on API 25: NO `??` or `?.` operators.
  *
- * Purpose: poster-grid sites (flixer's ~180-poster intro burst; cinejoy's lazy
+ * Purpose: poster-grid sites (the poster-grid site's ~180-poster intro burst; the lazy-load poster site's lazy
  * grid) load many TMDB poster images. Each decoded image becomes a GPU texture;
  * on the PowerVR GPU that load crashes the renderer (SIGSEGV in
  * KEGLReleaseRenderTarget). Two mechanisms cut the load:
@@ -25,9 +25,9 @@
  * actually visible (within a pre-load margin), so only on-screen posters get
  * real textures.
  *
- * VERIFIED (Oct 7 2026, flixer): the burst now produces ~125
+ * VERIFIED (Oct 7 2026, the poster-grid site): the burst now produces ~125
  * tmdb_image_blocked events and the allowlist climbs 0→10→1 as posters scroll
- * into view; no crash. Side effect: flixer's own "Emergency intro bypass"
+ * into view; no crash. Side effect: the poster-grid site's own "Emergency intro bypass"
  * fires because the 1x1 posters never finish the intro animation — harmless.
  *
  * Must never throw, never block page load, and be safe to re-inject.
@@ -36,12 +36,12 @@
   'use strict';
 
   // ---- Intro skip (PowerVR crash fix) -------------------------------------------
-  // Flixer's intro animation is a heavy GSAP/GPU workload. On the Fire TV's
+  // the poster-grid site's intro animation is a heavy GSAP/GPU workload. On the Fire TV's
   // PowerVR GPU it crashes the renderer (SIGSEGV in KEGLReleaseRenderTarget)
-  // ~14-17s after load. Flixer skips the intro when sessionStorage has
-  // "hasShownIntro" set. We set it at document start — BEFORE flixer's own JS
-  // reads it — so the intro never runs and flixer loads fast like a repeat visit.
-  // Must run on every flixer document start (sessionStorage resets when the
+  // ~14-17s after load. The poster-grid site skips the intro when sessionStorage has
+  // "hasShownIntro" set. We set it at document start — BEFORE the poster-grid site's own JS
+  // reads it — so the intro never runs and the poster-grid site loads fast like a repeat visit.
+  // Must run on every poster-grid site document start (sessionStorage resets when the
   // process dies), so this is placed BEFORE the idempotency guard below.
   try {
     var __h = (location.host || '').toLowerCase();
@@ -50,14 +50,14 @@
     }
   } catch (e) { /* never throw */ }
 
-  // Idempotency: this script is re-evaluated on every flixer page commit.
+  // Idempotency: this script is re-evaluated on every poster-grid site page commit.
   if (window.__flixerImgGuard) { return; }
   window.__flixerImgGuard = true;
 
   try {
-    // Only act on guarded poster-grid hosts: flixer (flixer.gd / *.flixer.gd /
-    // flixer.su / *.flixer.su) and cinejoy (cinejoy.pk / *.cinejoy.pk).
-    // (nippleflix was removed: its in-view posters don't match the allowlist,
+    // Only act on guarded poster-grid hosts: the poster-grid site (the poster-grid site.gd / *.the poster-grid site.gd /
+    // the poster-grid site.su / *.the poster-grid site.su) and the lazy-load poster site (the lazy-load poster site.pk / *.the lazy-load poster site.pk).
+    // (a poster site was removed: its in-view posters don't match the allowlist,
     // so the native 1x1 firewall blanked the home-page grid.)
     var host = (location.host || '').toLowerCase();
     if (!/(^|\.)flixer\.(gd|su)$|(^|\.)cinejoy\.pk$/.test(host)) { return; }
@@ -110,7 +110,7 @@
 
     // Virtualization: strip src from off-screen TMDB posters so the browser
     // never requests/decodes them. Restores src when they scroll into view.
-    // This is the real fix for the "flixer after other sites" crash: the 1x1
+    // This is the real fix for the "the poster-grid site after other sites" crash: the 1x1
     // firewall reduced GPU texture load but the request/decode/composite for
     // all 182 images still happened. With prior video GPU state resident,
     // that residual load pushed the PowerVR driver over the edge.
@@ -362,7 +362,7 @@
       } catch (e) { /* never throw */ }
     }
 
-    // Watch for images added/removed after injection (flixer appends posters
+    // Watch for images added/removed after injection (the poster-grid site appends posters
     // lazily). Re-observe new TMDB images and re-sync.
     function watchDom() {
       try {

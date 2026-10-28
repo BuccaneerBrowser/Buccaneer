@@ -20,4 +20,4 @@ for check in json.loads((root / 'tests/protected-fixes.json').read_text()):
         if 'before' in check: text = text[:text.index(check['before'])]
         data = text.encode()
     assert hashlib.sha256(data).hexdigest() == check['sha256'], check['path']
-print('PASS: original Flixer intro/image guard, Popup Guard/Coreflix click workarounds, documented passive API normalization, native Flixer guards, and dark mode preserved.')
+print('PASS: original poster-grid site intro/image guard, Popup Guard/video site click workarounds, documented passive API normalization, native poster-grid site guards, and dark mode preserved.')

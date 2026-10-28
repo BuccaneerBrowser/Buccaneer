@@ -11,7 +11,7 @@ Method: every concrete claim in the current docs was re-verified against the liv
 | `TESTING.md` | Current (added `480f62e`) | High. The interdependency map + per-site regression checklist. One gap: missing the `viewport_catcher` reason (§9.3). |
 | `SECURITY.md` | Current | Short; keystore/secret handling. |
 | `RELEASE_2.3.1_NOTES.md`, `RELEASE_2.2_NOTES.md` | Release notes | Verified claims: YouTube auto-hide skip ✓, `allowfullscreen` on player iframes ✓, start page 2×5=10 tiles ✓, minSdk 22 / targetSdk 33 ✓ (build.gradle.kts). |
-| `docs/history/*` (31 files) | Historical (1.3 → 1.9.3 era) | **Reference only.** Do not use for current behavior; several describe designs that were later removed (e.g. the two-site CSS dark-mode injection, repair199 baseline). |
+
 | `HANDOFF.md` (root, 2.2 era) | Superseded by HANDOFF-full-program.md | Use only for history. |
 
 ## 6.2 Verified claims (spot-checked, all PASS)
@@ -47,14 +47,14 @@ Method: every concrete claim in the current docs was re-verified against the liv
 `git status` shows two modified, **uncommitted** files (as of 2026-10-22):
 
 1. **`app/src/main/assets/popup_guard.js`** (+118/−8 lines, 434 → 538):
-   - **New `viewport_catcher` rule** in `killOverlays`: a positioned element covering **≥90% of the viewport** at **z ≥ 1000** on a page where `covers_video` cannot fire (no `<video>` yet — home/show/season/pre-roll pages). Targets ad injectors that use z=9999/1000 full-screen click catchers (seen on coreflix/nippleflix and movy, 2026-10-22). Player + its container chain exempt (`isPlayerChain`). New `overlay_killed` reason value: **`viewport_catcher`** (in addition to `floating_iframe` / `high_z_ad` / `covers_video`).
-   - **New `killCatchers()` — minimal flixer scanner.** The full-DOM `killOverlays` walk (querySelectorAll over every div/span/a/iframe) triggers the PowerVR driver crash during flixer's intro, so the heavy scanner stays OFF on flixer — but flixer still gets inline ad click-catchers that the `window.open` guard cannot catch. `killCatchers` scans **only body's direct children + iframes**, applies only the cheap rules (floating iframe ad; full-viewport catcher at z ≥ 1000), exempts the **main player iframe** (largest iframe with a real, non-blank, non-srcdoc src) and its container chain, and skips elements containing a `<video>` or real controls (`button, [role=button], input, select`). Runs immediately + every **5 s**, **no MutationObserver**.
-   - Host branch flipped: flixer → `killCatchers` (5 s interval); all other hosts → full `killOverlays` + debounced MutationObserver + slow interval (unchanged).
+   - **New `viewport_catcher` rule** in `killOverlays`: a positioned element covering **≥90% of the viewport** at **z ≥ 1000** on a page where `covers_video` cannot fire (no `<video>` yet — home/show/season/pre-roll pages). Targets ad injectors that use z=9999/1000 full-screen click catchers (seen on video site/removed poster site and video site, 2026-10-22). Player + its container chain exempt (`isPlayerChain`). New `overlay_killed` reason value: **`viewport_catcher`** (in addition to `floating_iframe` / `high_z_ad` / `covers_video`).
+   - **New `killCatchers()` — minimal poster-grid site scanner.** The full-DOM `killOverlays` walk (querySelectorAll over every div/span/a/iframe) triggers the PowerVR driver crash during poster-grid site's intro, so the heavy scanner stays OFF on poster-grid site — but poster-grid site still gets inline ad click-catchers that the `window.open` guard cannot catch. `killCatchers` scans **only body's direct children + iframes**, applies only the cheap rules (floating iframe ad; full-viewport catcher at z ≥ 1000), exempts the **main player iframe** (largest iframe with a real, non-blank, non-srcdoc src) and its container chain, and skips elements containing a `<video>` or real controls (`button, [role=button], input, select`). Runs immediately + every **5 s**, **no MutationObserver**.
+   - Host branch flipped: poster-grid site → `killCatchers` (5 s interval); all other hosts → full `killOverlays` + debounced MutationObserver + slow interval (unchanged).
 2. **`tests/protected-fixes.json`** — popup_guard.js hash updated to match the new file (the protected-fixes check still PASSES).
 
 **Consequences for future sessions:**
 - The "current" popup guard has **four** kill reasons: `floating_iframe`, `high_z_ad`, `viewport_catcher`, `covers_video`. TESTING.md and HANDOFF-full-program.md list only three — update them when this delta is committed.
-- Any future popup-guard change must preserve: the flixer minimal-scan split (PowerVR), the player-iframe exemption (both scanners), the containsVideo/hasControls protections, and the `data-fslogged` once-per-element reconnaissance logging.
+- Any future popup-guard change must preserve: the poster-grid site minimal-scan split (PowerVR), the player-iframe exemption (both scanners), the containsVideo/hasControls protections, and the `data-fslogged` once-per-element reconnaissance logging.
 - **Commit this delta** (or consciously revert it) before the next release build — a release built from the tree will ship it, but git history will not explain it.
 
 ## 6.4 Known doc gaps / corrections (for the next doc update)
@@ -63,4 +63,4 @@ Method: every concrete claim in the current docs was re-verified against the liv
 2. popup_guard.js line count 434 → 538 (uncommitted delta, §9.3).
 3. `viewport_catcher` is a fourth `overlay_killed` reason not listed in TESTING.md/HANDOFF.
 4. README's "tap the on-screen seek bar" line is ambiguous: the *native* seek bar is display-only; the line refers to the player's in-page seek bar (or the OSD). Keep the distinction explicit in any rewrite.
-5. Historical docs (`docs/history/`) describe removed designs (CSS dark-mode injection, repair199 baseline, 1.9.x menu layout) — treat as archaeology only.
+5. Historical designs (CSS dark-mode injection, repair199 baseline, 1.9.x menu layout) are no longer documented in this repository.

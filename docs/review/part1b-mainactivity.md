@@ -59,7 +59,7 @@ Blur report; invalidates the typing permit.
 - JS getter so page JS can query which frame currently owns media (for exclusive-video enforcement).
 
 ### 1475–1495 `tmdbAllowlist(urls: String?)`
-- Flixer image virtualization: JS syncs the allowlist of *visible* TMDB image URLs so the native `shouldInterceptRequest` firewall can let only those through (others get 1×1 responses).
+- poster-grid site image virtualization: JS syncs the allowlist of *visible* TMDB image URLs so the native `shouldInterceptRequest` firewall can let only those through (others get 1×1 responses).
 - **Line 1478–1479**: input must be ≤131072 chars and pass `JsonInputBudget.allows` (budget guard against JS flooding the bridge).
 - **Line 1481–1483**: must parse as `JSONArray`; **max 256 entries** (`arr.length() > 256` → return, keeping the old set).
 - **Line 1484–1487**: each entry must be non-empty and ≤8192 chars; collected into `newSet` (a `MutableSet<String>` — the `tmdbAllowlist` field).
@@ -324,20 +324,20 @@ The click action (fired on Select key-UP, or from other paths).
 - **2095**: `lastTapAt = now` — **this is what the 2 s focus-permit windows in editableFocused/editableClicked check against**.
 - **2096–2099**: captures `interaction = interactionSerial`, `editor = editorSession`, `target = customView ?: webView`. `current()` = `foreground && interaction == interactionSerial && editor == editorSession && target === (customView ?: webView) && textMode == TextMode.NONE && !menu.shown() && !listPanel.shown() && !textPanel.shown() && !startPage.shown()` — **interactionSerial + editorSession checks** for all async continuations.
 - **2102**: if the WebView has size → fire-and-forget `eval(__fb.selectAt(x/w, y/h))` — JS-side "select the element at this point" (enables the page to know what was clicked; no callback).
-- **2103–2112 (Flixer path)**: if `onFlixerPage && customView == null && sized` → runs `seekClickJs` probe with arg `'probe'`: returns `"track"` (over a recognized timeline) or `"frame"` (inside an opaque player frame we can't inspect) → then `sendTap(x, y, mouse=true)` (mouse-style tap) and `repairSeekClick(x, y, interaction)`. Otherwise plain `sendTap(x, y)` (touch). Comment: "Mouse input is only needed over a recognized timeline, or inside an opaque player frame we cannot inspect."
+- **2103–2112 (poster-grid site path)**: if `onFlixerPage && customView == null && sized` → runs `seekClickJs` probe with arg `'probe'`: returns `"track"` (over a recognized timeline) or `"frame"` (inside an opaque player frame we can't inspect) → then `sendTap(x, y, mouse=true)` (mouse-style tap) and `repairSeekClick(x, y, interaction)`. Otherwise plain `sendTap(x, y)` (touch). Comment: "Mouse input is only needed over a recognized timeline, or inside an opaque player frame we cannot inspect."
 - **2113**: `showCursor()`.
-- **2116–2123 (on-demand field reads)**: for delays 150 ms and 650 ms, `postForPage(delay) { if (!current()) return; eval(__fb.field()) { if (!current()) return; if state non-blank → focusFromPage(state) } }`. Comment: "On-demand field reads also cover Flixer without adding any listeners or recurring instrumentation to its protected documents." So after a tap, the app opportunistically asks the page "what field is focused now?" twice — this is how tapping an input on Flixer arms the typing permit without any persistent listeners.
+- **2116–2123 (on-demand field reads)**: for delays 150 ms and 650 ms, `postForPage(delay) { if (!current()) return; eval(__fb.field()) { if (!current()) return; if state non-blank → focusFromPage(state) } }`. Comment: "On-demand field reads also cover poster-grid site without adding any listeners or recurring instrumentation to its protected documents." So after a tap, the app opportunistically asks the page "what field is focused now?" twice — this is how tapping an input on poster-grid site arms the typing permit without any persistent listeners.
 - **2124**: `handler.postDelayed({ hideIme() }, 300)` — hide the IME 300 ms later (a tap on a non-input shouldn't leave the keyboard up).
 - **Invariants**: `lastTapAt` is set BEFORE any async work (the focus-permit window starts at tap time); every async callback re-checks `current()`.
 
 ## repairSeekClick (2127–2136)
-" One-shot fallback for identifiable seek tracks only; no Flixer listeners/timers/DOM styling."
+" One-shot fallback for identifiable seek tracks only; no poster-grid site listeners/timers/DOM styling."
 - No-op if WebView unsized or `seekClickJs` blank.
 - `postForPage(120)`: re-checks `onFlixerPage && customView == null && interaction == interactionSerial && !keypad.shown() && !menu.shown() && !listPanel.shown() && !textPanel.shown()` (**interactionSerial check**); then runs `seekClickJs(x/w, y/h)` (without 'probe' — the real seek click) to correct a seek that the mouse tap may have missed.
-- **Purpose**: on Flixer, a mouse tap on the timeline may not register as a seek (their JS expects different event sequences); this one-shot JS call performs the seek directly.
+- **Purpose**: on poster-grid site, a mouse tap on the timeline may not register as a seek (their JS expects different event sequences); this one-shot JS call performs the seek directly.
 
 ## sendTap (2138–2178)
-"Trusted native input: touch by default, mouse only for Flixer pointer/player clicks."
+"Trusted native input: touch by default, mouse only for poster-grid site pointer/player clicks."
 - **2140**: no-op if page unavailable or backgrounded.
 - **2141**: `epoch = pageEpoch` (captured for the UP decision).
 - **2142**: `target = customView ?: webView` (fullscreen custom view gets the tap, else the WebView).
@@ -363,7 +363,7 @@ The click action (fired on Select key-UP, or from other paths).
 - **Invariants**: `pendingTap` is null after this; the target of the terminal event is always the target of the DOWN.
 
 ## liftPointerIfPlaying (2193–2215)
-"Lift the simulated mouse pointer out of the page... pointer-aware players (Movy) see 'pointer over the controls' forever and pin their controls visible. Lifting only while video plays: while browsing, the parked pointer is what keeps hover menus open while the user reads them, so it must stay."
+"Lift the simulated mouse pointer out of the page... pointer-aware players (video site) see 'pointer over the controls' forever and pin their controls visible. Lifting only while video plays: while browsing, the parked pointer is what keeps hover menus open while the user reads them, so it must stay."
 - **2201**: no-op if `!hoverActive` (no hover has been sent).
 - **2202–2203**: only lifts if `playbackHeartbeatAt > 0` AND within the last **12 s** (i.e. video is actively playing — the heartbeat is updated by the player's JS while playing; >12 s stale means playback stopped).
 - **2204–2211**: sets `hoverActive = false`, dispatches `ACTION_HOVER_EXIT` (SOURCE_MOUSE) at (cx, cy), logs `pointer_lifted`. try/catch — "hover is a nicety; never let it break browsing".
@@ -440,13 +440,13 @@ The per-document state reset (called from `prepareNavigation` and `showStartPage
 - **Breaks if changed**: forgetting `interactionSerial++` → a tap's UP or a player callback from the old page acts on the new one; forgetting the pendingEvaluations clear → 2 s later a dead-document eval callback fires (harmless due to `complete`'s epoch check, but the deadline runnable leaks until then).
 
 ### videoCommand (2339–2362)
-"Runs a page_helpers.js video command. It answers 'ok', 'frame' (the player lives in a frame from another site; that frame's own copy of the helper ran the command — except on Flixer, which keeps the trusted-tap path), or 'none' (no player found; send the key)."
+"Runs a page_helpers.js video command. It answers 'ok', 'frame' (the player lives in a frame from another site; that frame's own copy of the helper ran the command — except on poster-grid site, which keeps the trusted-tap path), or 'none' (no player found; send the key)."
 - **2345**: `cancelPlayerWork()` — a new command supersedes any in-flight one.
 - **2346–2347**: captures `intent = playerIntent`, `target = customView ?: webView`.
 - **2348**: `eval("window.__fb ? __fb.$call : 'none'")` — `call` is a fixed string like `"togglePlay()"`, `"play()"`, `"pause()"` (NOT user input — safe to interpolate).
 - Callback: guard `!foreground || intent != playerIntent || target !== (customView ?: webView)` → drop (playerIntent check, not interactionSerial).
   - `"ok"`: if `tapFrame` → `postForPage(350) { if (intent == playerIntent && target === ...) retryIfPlayRefused() }` — after a scripted play, check whether the browser actually refused it (autoplay policy) and tap the player to satisfy the click requirement.
-  - `"frame"`: if `tapFrame && fallbackKey == KEYCODE_MEDIA_PLAY_PAUSE && onFlixerPage` → `tapPlayerFrame(mouse = true)` — "Flixer's player frame is not scripted: a real tap starts and toggles it." On any other site, "frame" means the frame's own helper already ran the command (nothing to do).
+  - `"frame"`: if `tapFrame && fallbackKey == KEYCODE_MEDIA_PLAY_PAUSE && onFlixerPage` → `tapPlayerFrame(mouse = true)` — "poster-grid site's player frame is not scripted: a real tap starts and toggles it." On any other site, "frame" means the frame's own helper already ran the command (nothing to do).
   - `"none"`/null/else → `sendKeyToPage(fallbackKey)` — no player found; synthesize the key into the page (e.g. SPACE for play/pause, M for mute).
 - **2360**: `refreshOsd(150, "")` — refresh the on-screen display after any command.
 - **Invariants**: `playerIntent` is the staleness token for player commands; `target` identity catches fullscreen enter/exit.
@@ -463,7 +463,7 @@ The per-document state reset (called from `prepareNavigation` and `showStartPage
 - `eval(__fb.frameCenter())` → JSON `{ok, x, y}` (fractions of the frame center).
 - Callback: guard `!foreground || intent != playerIntent || target !== ...` → drop. Parses JSON (ok==1, x, y; defaults 0.5/0.5; parse failure → ok=false).
 - If ok → `sendTap(fx * webView.width, fy * webView.height, mouse)`; else → `sendKeyToPage(KeyEvent.KEYCODE_SPACE)`.
-- `mouse` defaults to `onFlixerPage` (Flixer needs mouse events, others touch).
+- `mouse` defaults to `onFlixerPage` (poster-grid site needs mouse events, others touch).
 
 ### seekFromKey (2399–2402)
 - `seekRepeat.step(keyCode, repeatCount, downTime, eventTime)` — the `SeekRepeatPolicy` (line 169) converts a held key's repeat pattern into a seek delta (larger skips the longer you hold, per the OSD hint "Hold FF/Rewind: larger skips"). If `seconds != 0` → `videoSeek(seconds * direction)`.
