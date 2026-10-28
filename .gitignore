@@ -11,3 +11,4 @@ CHANGELOG.md
 
 # All markdown docs are private dev references — never publish
 *.md
+!README.md
