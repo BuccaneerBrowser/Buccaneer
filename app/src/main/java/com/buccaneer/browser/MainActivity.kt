@@ -385,6 +385,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     @Volatile private var darkMode = true
     private var desktopSite = true
     private var autoplay = false
+    private var confirmSiteExit = true
 
     // ---- low quality stream preference (the page scripts read this through the bridge, hence @Volatile)
     @Volatile private var lowQuality = true
@@ -421,6 +422,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var flixerImageGuardJs = ""
     private var flixerPosterGuardJs = ""
     private var scrollRestoreJs = ""
+    private var heroChurnGuardJs = ""
 
     // TMDB image virtualization: allowlist of image URLs currently visible on a
     // guarded poster-grid host. When such a host is the active page,
@@ -554,6 +556,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         darkMode = prefs.getBoolean("darkMode", true)
         desktopSite = prefs.getBoolean("desktopSite", true)
         autoplay = prefs.getBoolean("autoplay", true)
+        confirmSiteExit = prefs.getBoolean("confirmSiteExit", true)
         lowQuality = prefs.getBoolean("lowQuality", true)
         exclusiveVideo = prefs.getBoolean("exclusiveVideo", true)
         crashReloadCount = prefs.getInt("crashReloadCount", 0)
@@ -594,6 +597,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         flixerImageGuardJs = readAsset(this, "flixer_image_guard.js")
         flixerPosterGuardJs = readAsset(this, "flixer_poster_guard.js")
         scrollRestoreJs = readAsset(this, "scroll_restore.js")
+        heroChurnGuardJs = readAsset(this, "hero_churn_guard.js")
         fmhyThemeJs = readAsset(this, "fmhy_theme.js")
         tvUiJs = readAsset(this, "tv_ui.js")
         seekClickJs = readAsset(this, "seek_click.js")
@@ -873,6 +877,13 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 val origins = setOf("*")
                 // Do not rewrite navigator.webdriver. Keep the WebView environment unmodified
                 // for verification compatibility and predictable site behavior.
+                // Hero-carousel churn guard FIRST: it wraps window.setInterval before any
+                // other script runs, so it catches the hero carousel's 8000ms timer (and
+                // tags the app's own in-range timers by name, passing them through
+                // untouched). Browser-wide mitigation for the PowerVR hero-carousel
+                // texture-churn crash - NOT a root-cause fix; the GPU churn-limiter /
+                // driver-fix follow-up ticket is the backstop.
+                WebViewCompat.addDocumentStartJavaScript(webView, heroChurnGuardJs, origins)
                 WebViewCompat.addDocumentStartJavaScript(webView, guardJs, origins)
                 WebViewCompat.addDocumentStartJavaScript(webView, helpersJs, origins)
                 // the poster-grid site TMDB image firewall. Registered at DOCUMENT START (not just on
@@ -916,6 +927,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private fun injectFallback(view: WebView?) {
         if (view == null) return
         if (!scriptsAtDocumentStart) {
+            try { view.evaluateJavascript(heroChurnGuardJs, null) } catch (_: Throwable) { }
             try { view.evaluateJavascript(guardJs, null) } catch (_: Throwable) { }
             try { view.evaluateJavascript(helpersJs, null) } catch (_: Throwable) { }
             try { view.evaluateJavascript(scrollRestoreJs, null) } catch (_: Throwable) { }
@@ -1840,6 +1852,52 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         handoffNavigation(releaseMedia = false) { webView.goBackOrForward(offset); webView.requestFocus(); showCursor() }
     }
 
+    // ---- confirm-exit-site guard: a back press that would LEAVE the current
+    // site (no in-site history, or the back entry is a different host) shows a
+    // confirm dialog instead of bailing to the start page. In-site back is
+    // untouched. Toggle: Menu > "Confirm site exit".
+    private fun backWouldExitSite(): Boolean {
+        val currentUrl = webView.url ?: lastPageUrl
+        val currentHost = hostOf(currentUrl)
+        if (currentHost.isEmpty()) return false          // about:blank / non-http => no site to protect
+        if (!webView.canGoBack()) return true            // back would go to start page
+        val history = webView.copyBackForwardList()
+        val backUrl = history.getItemAtIndex(history.currentIndex - 1)?.url ?: return true
+        return hostOf(backUrl) != currentHost            // different host = exiting the site
+    }
+
+    private fun confirmExitSite() {
+        val currentUrl = webView.url ?: lastPageUrl
+        val host = hostOf(currentUrl)
+        if (host.isEmpty()) { if (webView.canGoBack()) navigateHistory(-1) else showStartPage(false); return }
+        showMenu("Exit $host?", listOf(
+            MenuItem("Yes") { if (webView.canGoBack()) navigateHistory(-1) else showStartPage(false) },
+            // Re-read the URL at action time: streaming sites redirect while the
+            // dialog is open, so the captured currentUrl may be stale.
+            MenuItem("No") { val root = siteRootOf(webView.url ?: lastPageUrl); if (root.isNotEmpty()) openUrl(root) }
+        ), back = { })   // back on dialog = cancel, stay put
+    }
+
+    private fun hostOf(url: String): String {
+        return try {
+            val uri = Uri.parse(url)
+            val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return ""
+            if (scheme != "http" && scheme != "https") return ""
+            uri.host?.lowercase(Locale.ROOT)?.removeSuffix(".") ?: ""
+        } catch (_: Throwable) { "" }
+    }
+
+    private fun siteRootOf(url: String): String {
+        return try {
+            val uri = Uri.parse(url)
+            val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return ""
+            if (scheme != "http" && scheme != "https") return ""
+            val host = uri.host?.lowercase(Locale.ROOT)?.removeSuffix(".") ?: return ""
+            val port = if (uri.port == -1) "" else ":" + uri.port
+            "$scheme://$host$port/"
+        } catch (_: Throwable) { "" }
+    }
+
     private fun reloadPage() {
         if (!pageAvailable() || startPage.shown()) return
         val destination = webView.url ?: lastPageUrl
@@ -2004,7 +2062,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     if (startPage.shown()) {
                         if (!startPage.back()) confirmExit()
                     } else {
-                        if (webView.canGoBack()) navigateHistory(-1) else showStartPage(false)
+                        if (confirmSiteExit && backWouldExitSite()) confirmExitSite() else if (webView.canGoBack()) navigateHistory(-1) else showStartPage(false)
                     }
                 }
             }
@@ -3500,6 +3558,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             val label = "Block redirects from $site: " + (if (guard.isProtected(site)) "ON" else "OFF")
             items.add(MenuItem(label) { toggleProtectedSite(site) })
         }
+        // Confirm site exit (toggle) - guard against back bailing to start page
+        items.add(MenuItem("Confirm site exit: " + (if (confirmSiteExit) "ON" else "OFF")) {
+            confirmSiteExit = !confirmSiteExit
+            prefs.edit().putBoolean("confirmSiteExit", confirmSiteExit).apply()
+            toast("Confirm site exit " + (if (confirmSiteExit) "ON" else "OFF"))
+        })
         // 10. Back
         items.add(MenuItem("Back") { navigateHistory(-1) })
         // 11. Settings

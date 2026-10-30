@@ -73,6 +73,22 @@
     var virtualized = 0;      // count of posters whose src was stripped
     var lastCpLog = 0;        // compositor_proxy log throttle (>=2s between logs)
 
+    // ---- Diagnostics: per-cycle timing + error counters -------------------
+    var diagVirtMs = 0;       // ms spent in virtualize() last cycle
+    var diagCardMs = 0;       // ms spent in virtualizeCards() last cycle
+    var diagSyncMs = 0;       // ms spent in sync() total last cycle
+    var diagVirtImgs = 0;     // images examined in virtualize() last cycle
+    var diagVirtStripped = 0; // images newly stripped last cycle
+    var diagVirtRestored = 0; // images restored last cycle
+    var diagCardProcs = 0;    // cards examined in virtualizeCards() last cycle
+    var diagCardVirt = 0;     // cards newly virtualized last cycle
+    var diagCardRest = 0;     // cards restored last cycle
+    var diagVirtErrors = 0;   // total exceptions in virtualize() (lifetime)
+    var diagCardErrors = 0;   // total exceptions in virtualizeCards() (lifetime)
+    var diagSyncCount = 0;    // total sync() calls (lifetime)
+    var diagScrollY = 0;      // last known scrollY
+    var diagScrollH = 0;      // last known document height
+
     // ---- Card virtualization (PowerVR crash fix, detail/episode page) --------
     // The detail page (episode list) composites many card containers
     // (overflow:hidden clipping layers). Each composited card is a GPU render
@@ -143,8 +159,10 @@
     }
 
     function virtualize() {
+      diagVirtImgs = 0; diagVirtStripped = 0; diagVirtRestored = 0;
       try {
         var imgs = document.querySelectorAll('img');
+        diagVirtImgs = imgs.length;
         for (var i = 0; i < imgs.length; i++) {
           var img = imgs[i];
           if (!img || img.tagName !== 'IMG') { continue; }
@@ -154,6 +172,7 @@
               img.src = img.__flixerSrc;
               img.__flixerSrc = null;
               virtualized--;
+              diagVirtRestored++;
             }
             continue;
           }
@@ -164,9 +183,10 @@
             img.__flixerSrc = src;
             img.src = '';
             virtualized++;
+            diagVirtStripped++;
           }
         }
-      } catch (e) { /* never throw */ }
+      } catch (e) { diagVirtErrors++; }
     }
 
     // Find the card containers: overflow:hidden elements that sit in a list
@@ -213,9 +233,11 @@
     // (CARD_BATCH per sync) so we never create a burst of render targets at
     // once — a burst is what trips the PowerVR driver race.
     function virtualizeCards() {
+      diagCardProcs = 0; diagCardVirt = 0; diagCardRest = 0;
       try {
         var cards = findCards();
         if (cards.length === 0) { return; }
+        diagCardProcs = cards.length;
         var restored = 0;
         for (var i = 0; i < cards.length; i++) {
           var el = cards[i];
@@ -228,6 +250,7 @@
             el.__cardVirtualized = false;
             cardVirtualized--;
             restored++;
+            diagCardRest++;
             if (restored >= CARD_BATCH) { break; } // avoid a burst
           } else if (!isVirt && !inView) {
             // Virtualize: record the size, then hide the content.
@@ -237,23 +260,30 @@
             el.style.setProperty('content-visibility', 'hidden');
             el.__cardVirtualized = true;
             cardVirtualized++;
+            diagCardVirt++;
           }
         }
-      } catch (e) { /* never throw */ }
+      } catch (e) { diagCardErrors++; }
     }
 
     function sync() {
       if (syncing) { return; }
       syncing = true;
+      diagSyncCount++;
+      var _t0 = Date.now();
       try {
         // First, virtualize: strip src from off-screen TMDB posters (so the
         // browser never requests/decodes them) and restore src for the ones that
         // have scrolled into the pre-load band. Must run before the allowlist is
         // rebuilt so restored images carry their real src when we read them.
         virtualize();
+        var _t1 = Date.now();
         // Then virtualize off-screen cards (content-visibility: hidden) to cut
         // the number of live composited layers — the PowerVR crash trigger.
         virtualizeCards();
+        var _t2 = Date.now();
+        diagVirtMs = _t1 - _t0;
+        diagCardMs = _t2 - _t1;
         // Rebuild the list from the live DOM so it always reflects reality.
         var imgs = document.querySelectorAll('img');
         var list = [];
@@ -307,10 +337,18 @@
             }
           }
           try {
+            diagScrollY = (window.pageYOffset || document.documentElement.scrollTop || 0) | 0;
+            diagScrollH = (document.documentElement.scrollHeight || 0) | 0;
+            diagSyncMs = Date.now() - _t0;
             window.Buccaneer.diagnosticEvent('compositor_proxy', JSON.stringify({
               realImg: realImg, emptyImg: emptyImg,
               fixedImgs: fixedImgs, clippedImgs: clippedImgs,
-              cardHidden: cardVirtualized
+              cardHidden: cardVirtualized,
+              virtMs: diagVirtMs, cardMs: diagCardMs, syncMs: diagSyncMs,
+              virtImgs: diagVirtImgs, virtStripped: diagVirtStripped, virtRestored: diagVirtRestored,
+              cardProcs: diagCardProcs, cardVirt: diagCardVirt, cardRest: diagCardRest,
+              virtErr: diagVirtErrors, cardErr: diagCardErrors,
+              syncN: diagSyncCount, scrollY: diagScrollY, scrollH: diagScrollH
             }));
           } catch (e) { /* bridge not ready */ }
         }
