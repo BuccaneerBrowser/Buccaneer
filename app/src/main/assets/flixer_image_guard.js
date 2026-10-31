@@ -89,6 +89,18 @@
     var diagScrollY = 0;      // last known scrollY
     var diagScrollH = 0;      // last known document height
 
+    // ---- Diagnostics: cumulative (non-resetting) counters --------------------
+    // Per-cycle counters reset every cycle and logging is throttled >=2s, so a
+    // logged zero does not mean no work happened in the unsampled interval.
+    // Cumulative counters recover intervening work through the last emitted
+    // sample (work between the last sample and a crash is still not captured).
+    // Document/frame-local: reset on a full document reload, not aggregated
+    // across frames or navigations.
+    var cumStripped = 0;    // total images stripped (lifetime, this document)
+    var cumRestored = 0;    // total images restored (lifetime, this document)
+    var cumCardVirt = 0;    // total cards virtualized (lifetime, this document)
+    var cumCardRest = 0;    // total cards restored (lifetime, this document)
+
     // ---- Card virtualization (PowerVR crash fix, detail/episode page) --------
     // The detail page (episode list) composites many card containers
     // (overflow:hidden clipping layers). Each composited card is a GPU render
@@ -104,6 +116,14 @@
     var cardVirtualized = 0; // count of cards currently virtualized
     var cardCache = null;    // cached list of card containers
     var cardCacheTime = 0;   // when the card cache was built (ms)
+
+    // ---- Flixer info-page overlay override (PowerVR crash fix) ----------------
+    // While the Flixer info-page overlay (the episode list, a fixed inset-0
+    // z-[100] composited layer) is open, the guard leaves its elements alone:
+    // restore any already-virtualized overlay element and never strip/virtualize
+    // them. The strip/restore churn inside the composited overlay layer is the
+    // suspected PowerVR render-target release crash trigger. Top document only.
+    var overlayOpen = false; // last known overlay state (for guard_state transitions)
 
     function isTmdbImg(img) {
       if (!img || img.tagName !== 'IMG') { return false; }
@@ -158,14 +178,46 @@
       } catch (e) { return false; }
     }
 
+    // Find the Flixer info-page overlay in the TOP document (null when not on a
+    // Flixer host, not the top document, or the overlay is not open). The overlay
+    // is the episode list rendered as a fixed inset-0 z-[100] composited layer.
+    // Re-queried in each of sync()/virtualize()/virtualizeCards() (up to 3x per
+    // sync); the query is a cheap querySelector and the cost is negligible.
+    function findInfoOverlay() {
+      try {
+        var h = (location.hostname || '').toLowerCase();
+        var isFlixer = (h === 'flixer.gd' || h.indexOf('.flixer.gd') !== -1 ||
+                        h === 'flixer.su' || h.indexOf('.flixer.su') !== -1);
+        if (!isFlixer) { return null; }
+        if (window !== window.top) { return null; } // top document only
+        return document.querySelector('div.fixed.inset-0[class*="z-[100]"]');
+      } catch (e) { return null; }
+    }
+
     function virtualize() {
       diagVirtImgs = 0; diagVirtStripped = 0; diagVirtRestored = 0;
       try {
+        var overlay = findInfoOverlay();
         var imgs = document.querySelectorAll('img');
         diagVirtImgs = imgs.length;
         for (var i = 0; i < imgs.length; i++) {
           var img = imgs[i];
           if (!img || img.tagName !== 'IMG') { continue; }
+          // OVERLAY OVERRIDE: while the Flixer info-page overlay is open, leave
+          // its images alone. Restore any already-virtualized overlay image (so
+          // it is never left stripped) and never strip overlay images — the
+          // strip/restore churn inside the composited overlay layer is the
+          // suspected PowerVR render-target release crash trigger.
+          if (overlay && overlay.contains(img)) {
+            if (img.__flixerSrc) {
+              img.src = img.__flixerSrc;
+              img.__flixerSrc = null;
+              virtualized--;
+              diagVirtRestored++;
+              cumRestored++;
+            }
+            continue;
+          }
           // Already virtualized: src is empty, original stored on the element.
           if (img.__flixerSrc) {
             if (inViewport(img, 200)) {
@@ -173,6 +225,7 @@
               img.__flixerSrc = null;
               virtualized--;
               diagVirtRestored++;
+              cumRestored++;
             }
             continue;
           }
@@ -184,6 +237,7 @@
             img.src = '';
             virtualized++;
             diagVirtStripped++;
+            cumStripped++;
           }
         }
       } catch (e) { diagVirtErrors++; }
@@ -235,12 +289,31 @@
     function virtualizeCards() {
       diagCardProcs = 0; diagCardVirt = 0; diagCardRest = 0;
       try {
+        var overlay = findInfoOverlay();
         var cards = findCards();
         if (cards.length === 0) { return; }
         diagCardProcs = cards.length;
+        // OVERLAY OVERRIDE PASS: restore any virtualized overlay cards (NO batch
+        // limit). The overlay's cards are the visible content; restore them all
+        // so the episode list renders. A separate pass so the CARD_BATCH break
+        // below cannot skip them.
+        if (overlay) {
+          for (var k = 0; k < cards.length; k++) {
+            var oel = cards[k];
+            if (overlay.contains(oel) && oel.__cardVirtualized) {
+              oel.style.setProperty('content-visibility', '');
+              oel.style.setProperty('contain-intrinsic-size', '');
+              oel.__cardVirtualized = false;
+              cardVirtualized--;
+              diagCardRest++;
+              cumCardRest++;
+            }
+          }
+        }
         var restored = 0;
         for (var i = 0; i < cards.length; i++) {
           var el = cards[i];
+          if (overlay && overlay.contains(el)) { continue; } // handled above; never virtualize
           var isVirt = el.__cardVirtualized;
           var inView = cardInViewport(el, CARD_MARGIN);
           if (isVirt && inView) {
@@ -251,6 +324,7 @@
             cardVirtualized--;
             restored++;
             diagCardRest++;
+            cumCardRest++;
             if (restored >= CARD_BATCH) { break; } // avoid a burst
           } else if (!isVirt && !inView) {
             // Virtualize: record the size, then hide the content.
@@ -261,6 +335,7 @@
             el.__cardVirtualized = true;
             cardVirtualized++;
             diagCardVirt++;
+            cumCardVirt++;
           }
         }
       } catch (e) { diagCardErrors++; }
@@ -272,6 +347,21 @@
       diagSyncCount++;
       var _t0 = Date.now();
       try {
+        // Flixer info-page overlay state: log a guard_state transition when the
+        // overlay opens/closes (observable detection). The override itself runs
+        // inside virtualize()/virtualizeCards(); we do NOT return early here so
+        // the allowlist rebuild + compositor_proxy telemetry stay active.
+        var _ov = findInfoOverlay();
+        var _nowOpen = !!_ov;
+        if (_nowOpen !== overlayOpen) {
+          overlayOpen = _nowOpen;
+          try {
+            window.Buccaneer.diagnosticEvent('guard_state', JSON.stringify({
+              state: _nowOpen ? 'overlay_open' : 'overlay_closed',
+              ts: Date.now()
+            }));
+          } catch (e) { /* bridge not ready */ }
+        }
         // First, virtualize: strip src from off-screen TMDB posters (so the
         // browser never requests/decodes them) and restore src for the ones that
         // have scrolled into the pre-load band. Must run before the allowlist is
@@ -348,7 +438,9 @@
               virtImgs: diagVirtImgs, virtStripped: diagVirtStripped, virtRestored: diagVirtRestored,
               cardProcs: diagCardProcs, cardVirt: diagCardVirt, cardRest: diagCardRest,
               virtErr: diagVirtErrors, cardErr: diagCardErrors,
-              syncN: diagSyncCount, scrollY: diagScrollY, scrollH: diagScrollH
+              syncN: diagSyncCount, scrollY: diagScrollY, scrollH: diagScrollH,
+              cumStripped: cumStripped, cumRestored: cumRestored,
+              cumCardVirt: cumCardVirt, cumCardRest: cumCardRest
             }));
           } catch (e) { /* bridge not ready */ }
         }
