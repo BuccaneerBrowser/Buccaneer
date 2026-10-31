@@ -1,16 +1,16 @@
 [
- {
-  "path": "app/src/main/assets/flixer_image_guard.js",
-  "sha256": "5a40a449d6c360ab72518afc421fb1ce24c58d7102e63f0ce10fc0aba01a57ac"
- },
- {
-  "path": "app/src/main/assets/popup_guard.js",
-  "sha256": "1c325e76ac7f4b0dcce6e262940b78e297c5866a08707dc62bde85426c99ed88"
- },
- {
-  "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
-  "after": "    private fun applyDarkMode()",
-  "before": "    private fun toggleDark()",
-  "sha256": "34c2605a00570fbdad24b3898dcdc5ac9899f5ef34e8d89383ff6802b77a94fa"
- }
+  {
+    "path": "app/src/main/assets/flixer_image_guard.js",
+    "sha256": "fc97820c6afe4025d6bacdf62f7e23940d840bc77417f6928416abf5747e7fb3"
+  },
+  {
+    "path": "app/src/main/assets/popup_guard.js",
+    "sha256": "1c325e76ac7f4b0dcce6e262940b78e297c5866a08707dc62bde85426c99ed88"
+  },
+  {
+    "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
+    "after": "    private fun applyDarkMode()",
+    "before": "    private fun toggleDark()",
+    "sha256": "34c2605a00570fbdad24b3898dcdc5ac9899f5ef34e8d89383ff6802b77a94fa"
+  }
 ]

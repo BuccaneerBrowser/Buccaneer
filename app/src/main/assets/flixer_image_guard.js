@@ -1,48 +1,38 @@
 /*
- * TMDB image firewall — JS half (the poster-grid site + the lazy-load poster site).
- *
- * Registered as a DOCUMENT-START script in MainActivity.installScripts()
- * (WebViewCompat.addDocumentStartJavaScript, all origins). It must run in every
- * frame BEFORE the page's scripts append the TMDB poster grids, so its allowlist
- * sync fires while the intro burst is happening. (An earlier version was injected
- * only from onPageCommitVisible via evaluateJavascript — too late; sync() saw
- * count:0 because images weren't laid out yet, the allowlist stayed empty, and
- * the full burst still hit the GPU → SIGSEGV in KEGLReleaseRenderTarget.)
+ * TMDB image firewall — JS half. DOCUMENT-START script (all origins; see
+ * MainActivity.installScripts()). Must run before the page's scripts append
+ * the poster grids: an earlier onPageCommitVisible injection was too late
+ * (sync saw count:0, the full burst hit the GPU -> KEGLReleaseRenderTarget
+ * SIGSEGV).
  *
  * Chromium 118 on API 25: NO `??` or `?.` operators.
  *
- * Purpose: poster-grid sites (the poster-grid site's ~180-poster intro burst; the lazy-load poster site's lazy
- * grid) load many TMDB poster images. Each decoded image becomes a GPU texture;
- * on the PowerVR GPU that load crashes the renderer (SIGSEGV in
- * KEGLReleaseRenderTarget). Two mechanisms cut the load:
- *   1. VIRTUALIZE: strip `src` from off-screen TMDB posters so the browser never
- *      requests/decodes them; restore `src` when they scroll into view. This is
- *      the primary fix — it stops the request/decode/composite work entirely.
- *   2. 1x1 FIREWALL: the native layer (shouldInterceptRequest) serves a 1x1
- *      transparent pixel for any image.tmdb.org URL NOT in the allowlist, as a
- *      backstop for anything that slips past virtualization.
- * This script keeps the allowlist in sync with the set of TMDB images that are
- * actually visible (within a pre-load margin), so only on-screen posters get
- * real textures.
+ * Two mechanisms cut the GPU texture load that crashes the PowerVR renderer
+ * (SIGSEGV in KEGLReleaseRenderTarget):
+ *   1. VIRTUALIZE: strip `src` from off-screen TMDB posters so the browser
+ *      never requests/decodes them; restore when they scroll into view.
+ *      Primary fix — stops the request/decode/composite work entirely.
+ *   2. 1x1 FIREWALL: native shouldInterceptRequest serves a 1x1 pixel for
+ *      any image.tmdb.org URL not in the allowlist (backstop).
+ * The allowlist tracks the actually-visible TMDB images (with a pre-load
+ * margin), so only on-screen posters get real textures.
  *
- * VERIFIED (Oct 7 2026, the poster-grid site): the burst now produces ~125
- * tmdb_image_blocked events and the allowlist climbs 0→10→1 as posters scroll
- * into view; no crash. Side effect: the poster-grid site's own "Emergency intro bypass"
- * fires because the 1x1 posters never finish the intro animation — harmless.
+ * VERIFIED (Oct 7 2026): the burst now yields ~125 tmdb_image_blocked events
+ * and the allowlist climbs 0->10->1 as posters scroll in; no crash. Side
+ * effect: the site's "Emergency intro bypass" fires (1x1 posters never finish
+ * the intro animation) — harmless.
  *
- * Must never throw, never block page load, and be safe to re-inject.
+ * Must never throw, never block page load, safe to re-inject.
  */
 (function () {
   'use strict';
 
   // ---- Intro skip (PowerVR crash fix) -------------------------------------------
-  // the poster-grid site's intro animation is a heavy GSAP/GPU workload. On the Fire TV's
-  // PowerVR GPU it crashes the renderer (SIGSEGV in KEGLReleaseRenderTarget)
-  // ~14-17s after load. The poster-grid site skips the intro when sessionStorage has
-  // "hasShownIntro" set. We set it at document start — BEFORE the poster-grid site's own JS
-  // reads it — so the intro never runs and the poster-grid site loads fast like a repeat visit.
-  // Must run on every poster-grid site document start (sessionStorage resets when the
-  // process dies), so this is placed BEFORE the idempotency guard below.
+  // The site's intro animation is a heavy GSAP/GPU workload that crashes the
+  // PowerVR renderer ~14-17s after load. The site skips it when sessionStorage
+  // "hasShownIntro" is set; set it at document start, before the site's own JS
+  // reads it. Must run on every document start (session storage resets when
+  // the process dies), so it sits BEFORE the idempotency guard below.
   try {
     var __h = (location.host || '').toLowerCase();
     if (/(^|\.)flixer\.(gd|su)$/.test(__h)) {
@@ -55,10 +45,9 @@
   window.__flixerImgGuard = true;
 
   try {
-    // Only act on guarded poster-grid hosts: the poster-grid site (the poster-grid site.gd / *.the poster-grid site.gd /
-    // the poster-grid site.su / *.the poster-grid site.su) and the lazy-load poster site (the lazy-load poster site.pk / *.the lazy-load poster site.pk).
-    // (a poster site was removed: its in-view posters don't match the allowlist,
-    // so the native 1x1 firewall blanked the home-page grid.)
+    // Guarded hosts only: flixer.gd / *.flixer.gd / flixer.su / *.flixer.su and
+    // cinejoy.pk / *.cinejoy.pk. (A third poster site was removed: its in-view
+    // posters didn't match the allowlist, so the 1x1 firewall blanked its grid.)
     var host = (location.host || '').toLowerCase();
     if (!/(^|\.)flixer\.(gd|su)$|(^|\.)cinejoy\.pk$/.test(host)) { return; }
 
@@ -91,26 +80,21 @@
 
     // ---- Diagnostics: cumulative (non-resetting) counters --------------------
     // Per-cycle counters reset every cycle and logging is throttled >=2s, so a
-    // logged zero does not mean no work happened in the unsampled interval.
-    // Cumulative counters recover intervening work through the last emitted
-    // sample (work between the last sample and a crash is still not captured).
-    // Document/frame-local: reset on a full document reload, not aggregated
-    // across frames or navigations.
+    // logged zero can hide unsampled work; cumulative counters recover it up to
+    // the last emitted sample (work between the last sample and a crash is
+    // still not captured). Document/frame-local: reset on full reload.
     var cumStripped = 0;    // total images stripped (lifetime, this document)
     var cumRestored = 0;    // total images restored (lifetime, this document)
     var cumCardVirt = 0;    // total cards virtualized (lifetime, this document)
     var cumCardRest = 0;    // total cards restored (lifetime, this document)
 
     // ---- Card virtualization (PowerVR crash fix, detail/episode page) --------
-    // The detail page (episode list) composites many card containers
-    // (overflow:hidden clipping layers). Each composited card is a GPU render
-    // target; on the Fire TV's PowerVR GPU, too many render targets crash the
-    // renderer (SIGSEGV in KEGLReleaseRenderTarget during glDrawArrays). We
-    // virtualize off-screen cards (content-visibility: hidden +
-    // contain-intrinsic-size) so the browser skips rendering them, cutting the
-    // number of live composited layers. content-visibility (not display:none)
-    // keeps the box in layout via its intrinsic size, so the card's rect stays
-    // valid and restore-on-scroll works without reflow.
+    // Detail-page cards are overflow:hidden composited clipping layers — each a
+    // GPU render target; too many crash the PowerVR renderer (KEGLReleaseRenderTarget
+    // during glDrawArrays). Off-screen cards get content-visibility: hidden +
+    // contain-intrinsic-size (not display:none: the box stays in layout via its
+    // intrinsic size, so the card's rect stays valid and restore-on-scroll works
+    // without reflow), cutting the number of live composited layers.
     var CARD_MARGIN = 600;   // pre-load band around the viewport (px)
     var CARD_BATCH = 12;     // max cards to restore per sync (avoid a burst)
     var cardVirtualized = 0; // count of cards currently virtualized
@@ -118,11 +102,10 @@
     var cardCacheTime = 0;   // when the card cache was built (ms)
 
     // ---- Flixer info-page overlay override (PowerVR crash fix) ----------------
-    // While the Flixer info-page overlay (the episode list, a fixed inset-0
-    // z-[100] composited layer) is open, the guard leaves its elements alone:
-    // restore any already-virtualized overlay element and never strip/virtualize
-    // them. The strip/restore churn inside the composited overlay layer is the
-    // suspected PowerVR render-target release crash trigger. Top document only.
+    // While the info-page overlay (episode list, fixed inset-0 z-[100] composited
+    // layer) is open, leave its elements alone: restore any already-virtualized
+    // one, never strip/virtualize — strip/restore churn inside the composited
+    // overlay is the suspected render-target release crash trigger. Top doc only.
     var overlayOpen = false; // last known overlay state (for guard_state transitions)
 
     function isTmdbImg(img) {
@@ -135,30 +118,26 @@
       return h === 'image.tmdb.org' || h.indexOf('.tmdb.org') === h.length - 9;
     }
 
-    // compositor_proxy: a TMDB poster is either live (has a src, decoded GPU
-    // texture) or virtualized (src stripped by the guard, original kept in
-    // __flixerSrc). Used to correlate the PowerVR crash with live texture count.
+    // A TMDB poster is live (src present, decoded GPU texture) or virtualized
+    // (src stripped, original in __flixerSrc) — correlates the crash with live count.
     function isTmdbPoster(im) {
       if (!im || im.tagName !== 'IMG') { return false; }
       if (im.__flixerSrc) { return true; }   // already virtualized by the guard
       return isTmdbImg(im);
     }
 
-    // Virtualization: strip src from off-screen TMDB posters so the browser
-    // never requests/decodes them. Restores src when they scroll into view.
-    // This is the real fix for the "the poster-grid site after other sites" crash: the 1x1
-    // firewall reduced GPU texture load but the request/decode/composite for
-    // all 182 images still happened. With prior video GPU state resident,
-    // that residual load pushed the PowerVR driver over the edge.
+    // Viewport test (both axes, with margin). Core of the virtualization fix:
+    // the 1x1 firewall cut texture load but the request/decode/composite of all
+    // ~182 posters still happened; with prior video GPU state resident that
+    // residual load pushed the PowerVR driver over the edge.
     function inViewport(img, margin) {
       try {
         var m = margin || 0;
         var r = img.getBoundingClientRect();
         var vh = (window.innerHeight || document.documentElement.clientHeight) + m;
         var vw = (window.innerWidth || document.documentElement.clientWidth) + m;
-        // If the image has zero dimensions (1x1 placeholder or not yet laid out),
-        // check the parent container instead — the card may be in the viewport
-        // even though the image itself is collapsed.
+        // Zero dimensions (1x1 placeholder or not yet laid out): use the parent
+        // container's rect — the card may be in view even if the image is collapsed.
         if (r.width <= 0 || r.height <= 0) {
           var p = img.parentElement;
           var depth = 0;
@@ -178,11 +157,9 @@
       } catch (e) { return false; }
     }
 
-    // Find the Flixer info-page overlay in the TOP document (null when not on a
-    // Flixer host, not the top document, or the overlay is not open). The overlay
-    // is the episode list rendered as a fixed inset-0 z-[100] composited layer.
-    // Re-queried in each of sync()/virtualize()/virtualizeCards() (up to 3x per
-    // sync); the query is a cheap querySelector and the cost is negligible.
+    // The Flixer info-page overlay (episode list, fixed inset-0 z-[100]) in the
+    // TOP document; null when not on a Flixer host, not top, or closed. Cheap
+    // querySelector, re-queried up to 3x per sync.
     function findInfoOverlay() {
       try {
         var h = (location.hostname || '').toLowerCase();
@@ -203,11 +180,9 @@
         for (var i = 0; i < imgs.length; i++) {
           var img = imgs[i];
           if (!img || img.tagName !== 'IMG') { continue; }
-          // OVERLAY OVERRIDE: while the Flixer info-page overlay is open, leave
-          // its images alone. Restore any already-virtualized overlay image (so
-          // it is never left stripped) and never strip overlay images — the
-          // strip/restore churn inside the composited overlay layer is the
-          // suspected PowerVR render-target release crash trigger.
+          // OVERLAY OVERRIDE: open overlay — restore any already-virtualized
+          // image, never strip (strip/restore churn in the composited overlay
+          // is the suspected render-target release crash trigger).
           if (overlay && overlay.contains(img)) {
             if (img.__flixerSrc) {
               img.src = img.__flixerSrc;
@@ -243,9 +218,8 @@
       } catch (e) { diagVirtErrors++; }
     }
 
-    // Find the card containers: overflow:hidden elements that sit in a list
-    // (3+ same-tag siblings). These are the composited clipping layers that
-    // trigger the PowerVR crash. Cached for 5s so we don't re-scan every sync.
+    // Card containers: overflow:hidden/clip elements in a list (3+ same-tag
+    // siblings) — the composited clipping layers. Cached 5s (re-scan is expensive).
     function findCards() {
       var now = Date.now();
       if (cardCache && now - cardCacheTime < 5000) { return cardCache; }
@@ -282,10 +256,9 @@
       } catch (e) { return false; }
     }
 
-    // Virtualize off-screen cards (content-visibility: hidden) and restore the
-    // ones that have scrolled into the pre-load band. Restores are batched
-    // (CARD_BATCH per sync) so we never create a burst of render targets at
-    // once — a burst is what trips the PowerVR driver race.
+    // Virtualize off-screen cards, restore those in the pre-load band. Restores
+    // are batched (CARD_BATCH per sync): a burst of render targets trips the
+    // PowerVR driver race.
     function virtualizeCards() {
       diagCardProcs = 0; diagCardVirt = 0; diagCardRest = 0;
       try {
@@ -293,10 +266,9 @@
         var cards = findCards();
         if (cards.length === 0) { return; }
         diagCardProcs = cards.length;
-        // OVERLAY OVERRIDE PASS: restore any virtualized overlay cards (NO batch
-        // limit). The overlay's cards are the visible content; restore them all
-        // so the episode list renders. A separate pass so the CARD_BATCH break
-        // below cannot skip them.
+        // OVERLAY OVERRIDE PASS: restore all virtualized overlay cards (no batch
+        // limit — they are the visible content); a separate pass so the
+        // CARD_BATCH break below cannot skip them.
         if (overlay) {
           for (var k = 0; k < cards.length; k++) {
             var oel = cards[k];
@@ -347,10 +319,9 @@
       diagSyncCount++;
       var _t0 = Date.now();
       try {
-        // Flixer info-page overlay state: log a guard_state transition when the
-        // overlay opens/closes (observable detection). The override itself runs
-        // inside virtualize()/virtualizeCards(); we do NOT return early here so
-        // the allowlist rebuild + compositor_proxy telemetry stay active.
+        // Log a guard_state transition on overlay open/close (observable
+        // detection). No early return: allowlist rebuild + compositor_proxy
+        // telemetry stay active while the overlay is open.
         var _ov = findInfoOverlay();
         var _nowOpen = !!_ov;
         if (_nowOpen !== overlayOpen) {
@@ -362,14 +333,11 @@
             }));
           } catch (e) { /* bridge not ready */ }
         }
-        // First, virtualize: strip src from off-screen TMDB posters (so the
-        // browser never requests/decodes them) and restore src for the ones that
-        // have scrolled into the pre-load band. Must run before the allowlist is
-        // rebuilt so restored images carry their real src when we read them.
+        // Virtualize first: must run before the allowlist rebuild so restored
+        // images carry their real src when we read them.
         virtualize();
         var _t1 = Date.now();
-        // Then virtualize off-screen cards (content-visibility: hidden) to cut
-        // the number of live composited layers — the PowerVR crash trigger.
+        // Then cut live composited layers (off-screen cards -> content-visibility: hidden).
         virtualizeCards();
         var _t2 = Date.now();
         diagVirtMs = _t1 - _t0;
@@ -386,11 +354,9 @@
           if (!src || seen[src]) { continue; }
           seen[src] = true;
           list.push(src);
-          // If this image was loaded as a 1x1 placeholder (blocked by the native
-          // firewall before it entered the allowlist), force a re-request with a
-          // cache-buster. The browser's HTTP cache holds the 1x1 response, so a
-          // plain src reset won't trigger a network fetch. The cache-busted URL
-          // is added to the allowlist so the firewall lets it through.
+          // Loaded as a 1x1 placeholder (native firewall blocked it before the
+          // allowlist): the HTTP cache holds the 1x1, so a plain src reset won't
+          // refetch — force a cache-busted re-request and allowlist the new URL.
           if (img.naturalWidth === 1 && img.naturalHeight === 1) {
             var realSrc = img.getAttribute('src') || src;
             var busted = realSrc + (realSrc.indexOf('?') !== -1 ? '&' : '?') + 'r=' + Date.now();
@@ -407,11 +373,9 @@
             img2.__flixerBlocked = true;
           }
         }
-        // compositor_proxy: every >=2s, log how many TMDB posters still hold a
-        // live src (decoded GPU textures) vs virtualized, plus how many card
-        // containers are position:fixed / overflow:hidden (compositor clipping
-        // layers). The last sample before a silent native death shows what was
-        // actually live at crash time.
+        // compositor_proxy (>=2s): live vs virtualized TMDB posters + fixed /
+        // overflow-hidden (compositor clipping) parent counts. The last sample
+        // before a silent native death shows what was live at crash time.
         var now = Date.now();
         if (now - lastCpLog >= 2000) {
           lastCpLog = now;
@@ -492,8 +456,8 @@
       } catch (e) { /* never throw */ }
     }
 
-    // Watch for images added/removed after injection (the poster-grid site appends posters
-    // lazily). Re-observe new TMDB images and re-sync.
+    // Images added/removed after injection (posters are appended lazily):
+    // re-observe new TMDB images and re-sync.
     function watchDom() {
       try {
         var mo = new MutationObserver(function (mutations) {
@@ -535,9 +499,8 @@
       setTimeout(sync, 3000);
     } catch (e) { /* never throw */ }
 
-    // Periodic safety net: the IntersectionObserver may not re-fire for an
-    // image that was already intersecting when its src got restored by
-    // virtualize(). A slow sync catches those and re-asserts the allowlist.
+    // Periodic safety net: the IntersectionObserver may not re-fire for an image
+    // already intersecting when virtualize() restored its src.
     try {
       setInterval(sync, 2000);
     } catch (e) { /* never throw */ }
