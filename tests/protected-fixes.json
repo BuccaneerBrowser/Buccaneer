@@ -5,12 +5,12 @@
   },
   {
     "path": "app/src/main/assets/popup_guard.js",
-    "sha256": "1c325e76ac7f4b0dcce6e262940b78e297c5866a08707dc62bde85426c99ed88"
+    "sha256": "ef9cfe980cf2523c255cf9db29484ae7b3feaafd574c13e423bf0e2ca305b266"
   },
   {
     "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",
     "after": "    private fun applyDarkMode()",
     "before": "    private fun toggleDark()",
-    "sha256": "34c2605a00570fbdad24b3898dcdc5ac9899f5ef34e8d89383ff6802b77a94fa"
+    "sha256": "137a476368c8c8ced2f502d28fd5d87feac1187786f2ecb185b667c1dade2864"
   }
 ]

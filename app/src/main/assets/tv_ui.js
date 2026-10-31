@@ -85,9 +85,8 @@
     if((depth||0)>5)return JSON.stringify({status:'unreachable'});
     var owns=false;try{owns=target===frameId && window.Buccaneer.activeInputFrame()===frameId;}catch(e){}
     if(owns){
-      // The app records the field the user actually tapped; typing targets that
-      // element by ID even when DOM focus has moved (the app keypad holds focus).
-      // contentEditable still needs the live selection.
+      // The app records the field the user actually tapped; typing targets it by ID even when
+      // DOM focus has moved (the app keypad holds focus). contentEditable still needs the live selection.
       var el=active()||byId(id);
       if(!el || !id || fieldId(el)!==id || !el.isConnected || el.disabled || el.readOnly ||
          (el.isContentEditable && el!==active()))return JSON.stringify({status:'stale'});
@@ -95,16 +94,12 @@
       try{
         if(action==='submit'){
           // SUBMIT DESIGN — read before changing (this path regresses silently and often):
-          // The page can ONLY ever see synthetic (isTrusted===false) Enter events; the app
-          // turns the remote's Select key into these, so a page's own Enter handler can never
-          // be relied on to run the search. React/SPA handlers frequently call preventDefault()
-          // on the synthetic key (proceed=false) WITHOUT performing the search. Therefore the
-          // form submission below is the PRIMARY, reliable action — it must NOT be gated on
-          // `proceed`. Gating it on `proceed` (the old `form && proceed`) is exactly the bug
-          // where "I can type but Enter doesn't search": the page eats the key, we skip the
-          // form submit, and nothing happens. Form submit serializes the live DOM values,
-          // which are correct because typing updates them. Only formless widgets fall back to
-          // best-effort key dispatch.
+          // The page can ONLY ever see synthetic (isTrusted===false) Enter events, and React/SPA
+          // handlers frequently preventDefault() them WITHOUT performing the search. Therefore
+          // the form submission below is the PRIMARY, reliable action — it must NOT be gated on
+          // `proceed` (the old `form && proceed` gating is exactly the "I can type but Enter
+          // doesn't search" bug). Form submit serializes the live DOM values (correct, since
+          // typing updates them); only formless widgets fall back to best-effort key dispatch.
           var eventOptions={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};
           var proceed=el.dispatchEvent(new KeyboardEvent('keydown',eventOptions));
           if(proceed)proceed=el.dispatchEvent(new KeyboardEvent('keypress',eventOptions));

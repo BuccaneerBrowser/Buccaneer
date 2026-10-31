@@ -5,8 +5,7 @@
  *            -> "ok" | "frame" (player is in a frame we cannot script) | "none"
  *            frameCenter() (where to tap a player we cannot script), diag() (Settings > Diagnostics)
  *   typing:  field() focusIntoView() clear()
- * It also tells the app when a real tap landed in a text field, so the keypad can open by itself,
- * and keeps a page from playing two videos at once (see "one video at a time" below).
+ * Also reports real taps that land in text fields (opens the keypad) and enforces one video at a time.
  */
 (function () {
   'use strict';
@@ -15,19 +14,16 @@
   window.__fbInstalled = true;
 
   // the poster-grid site: skip all instrumentation. The PowerVR GPU driver on this Fire TV crashes
-  // (SIGSEGV in KEGLReleaseRenderTarget) when our DOM observers, HLS hooks, and event
-  // listeners run alongside the poster-grid site's intro animation. The passive __fb API is still
-  // exposed (video controls, typing) but no continuous capture, timers, or synthetic
-  // clicks are installed on the poster-grid site-owned documents.
+  // (SIGSEGV in KEGLReleaseRenderTarget) when our observers/hooks/listeners run alongside the
+  // site's intro animation. Only the passive __fb API (video controls, typing) is exposed here.
   var __host = '';
   try { __host = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
   var __isFlixer = /(^|\.)flixer\.(gd|su)$/.test(__host);
   var __isStreamCorner = /(^|\.)streamcorner\.st$/.test(__host);
 
-  // NOTE: dark mode is handled by the WebView's native force-dark (FORCE_DARK_ON),
-  // configured in MainActivity.applyDarkMode(). Do NOT inject CSS filters here —
-  // filter:invert() on <html> crashes the PowerVR GPU process on the Fire TV
-  // (SIGSEGV in libGLESv2_POWERVR_ROGUE.so), which took down the poster-grid site host.
+  // NOTE: dark mode is the WebView's native force-dark (MainActivity.applyDarkMode()). Do NOT
+  // inject CSS filters here — filter:invert() on <html> crashes the PowerVR GPU process
+  // (SIGSEGV in libGLESv2_POWERVR_ROGUE.so) on the Fire TV.
 
   var MIN_SIDE = 100;
 
@@ -50,7 +46,6 @@
     return true;
   }
 
-  // all <video> elements in this document and in same-origin iframes
   function collect(doc, depth, out) {
     var vids = doc.getElementsByTagName('video');
     for (var i = 0; i < vids.length; i++) out.push(vids[i]);
@@ -101,7 +96,6 @@
     } catch (e) { return 0; }
   }
 
-  // the biggest visible frame from another site
   function bigFrame() {
     var frames = document.getElementsByTagName('iframe');
     var best = null;
@@ -127,10 +121,10 @@
     return n;
   }
 
-  // What should the remote control? A video that is playing right here wins. Otherwise a big frame
-  // from another site (a typical embedded player) beats a small video (an ad or a banner).
-  // Returns {video: el}, {frame: el} or null.
-  // Passive selected-player identity. No new the poster-grid site listeners or timers.
+  // What should the remote control? A video playing right here wins; otherwise a big frame from
+  // another site (a typical embedded player) beats a small video (an ad or a banner).
+  // Returns {video:el}, {frame: el} or null. Passive selected-player identity: no new listeners
+  // or timers on the poster-grid site.
   var selectedTarget = null;
   function attachedTarget(el) {
     try {
@@ -360,19 +354,15 @@
 
   // ------------------------------------------------------------------ full screen
 
-  // Page-level (CSS) fullscreen. Native WebView fullscreen (Chromium's FullScreenView)
-  // draws a center play/pause button that stays on screen while the video is paused.
-  // Instead of native fullscreen we make the player container a page-level (CSS)
-  // fullscreen: position:fixed over the whole viewport, black background, and the site's
-  // own player UI (which auto-hides on idle) stays in charge. Chromium's native
-  // FullScreenView is never created, so the center button is never drawn.
+  // Page-level (CSS) fullscreen. Native WebView fullscreen (Chromium's FullScreenView) draws a
+  // center play/pause button that stays on screen while paused, so instead we make the player
+  // container position:fixed over the whole viewport — the site's own player UI stays in charge
+  // and the native FullScreenView (and its button) is never created.
   //
-  // Players like Clappr check document.fullscreenElement and listen for fullscreenchange,
-  // so we fake both: while active, fullscreenElement reports our element, and we dispatch
-  // a synthetic fullscreenchange on enter/exit.
+  // Players like Clappr check document.fullscreenElement and listen for fullscreenchange, so we
+  // fake both (fullscreenElement reports our element; we dispatch a synthetic fullscreenchange).
   //
-  // the poster-grid site keeps the native path: its document returns early below, so none of this is
-  // installed there.
+  // the poster-grid site keeps the native path (it returns early below).
 
   var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false, savedScroll: null, scrollGuard: null, offsetTimer: 0, offsetEl: null, offsetTicks: 0, entryClasses: null, naturalRect: null, hostEntryClasses: null, hostNaturalRect: null, hostPosSaved: null, hostZSaved: null, hostPosWasStatic: false };
   var __nativeFsFns = {};
@@ -472,14 +462,11 @@
     } else {
       cssFs.hostEntryClasses = null; cssFs.hostNaturalRect = null;
     }
-    // Stacking-context fix: if the element is inside a shadow root, the shadow host's
-    // z-index determines the shadow subtree's paint level in the root stacking context.
-    // If the host is static/z:auto, a top-doc element with a high z-index (e.g. a menu bar)
-    // paints on top of the fullscreen video. Lift the host to relative + z-index max so the
-    // shadow subtree (video included) paints above all top-doc elements. Save the host's
-    // inline position + z-index (value+priority) so we restore exactly on exit.
-    // Note: only the innermost shadow host is lifted (getRootNode returns the innermost
-    // root); nested shadow roots would need each host lifted (single-root case verified).
+    // Stacking-context fix: the shadow host's z-index sets the shadow subtree's paint level in
+    // the root stacking context; if the host is static/z:auto, a high-z-index top-doc element
+    // (e.g. a menu bar) paints over the fullscreen video. Lift the host to relative + z-index max,
+    // saving its inline position + z-index (value+priority) to restore exactly on exit. Only the
+    // innermost shadow host is lifted (getRootNode returns the innermost root; single-root verified).
     if (__fsHost) {
       try {
         cssFs.hostPosSaved = { v: __fsHost.style.getPropertyValue('position'), p: __fsHost.style.getPropertyPriority('position') };
@@ -533,13 +520,10 @@
     return Promise.resolve();
   }
 
-  // Entering CSS fullscreen resizes the player container (or the iframe that holds the
-  // player) to fill the viewport. On some players — notably the vidbolt player inside a
-  // cross-origin iframe — that resize pauses the video. If the video was playing before we
-  // entered fullscreen, watch for the first ~2.5 s and resume it if the transition paused
-  // it. The short window means a deliberate user pause (which happens later) is never
-  // fought. Only active in the frame that actually holds the <video>; in an ancestor frame
-  // `el` is the <iframe> element and no video is reachable, so this is a no-op there.
+  // Entering CSS fullscreen resizes the player container (or the iframe holding the player) to
+  // fill the viewport; on some players (notably vidbolt in a cross-origin iframe) that resize
+  // pauses the video. If it was playing, watch ~2.5 s and resume it — the short window means a
+  // deliberate user pause is never fought. No-op in ancestor frames (no <video> reachable there).
   function installFsResumeGuard(el) {
     if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
     function findVideo() {
@@ -603,13 +587,10 @@
     pinPlayerFrame(); // re-pin the player iframe now that CSS fullscreen is gone
     try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
     if (window === window.top) cssFsNotifyApp(false); else cssFsPostParent(false);
-    // After a fullscreen cycle a stale "fullscreen" class can persist on the player
-    // (or its shadow host) and collapse the layout to zero height (black screen with
-    // audio). Re-check a few times and remove any session-added fullscreen class if the
-    // layout is collapsed. Structure-scoped: only classes matching /fullscreen/i that
-    // were NOT present at entry (i.e. added during the session) are removed. Checks both
-    // the fullscreen element and its shadow host (if any), with per-target entry-class
-    // and natural-size guards.
+    // After a fullscreen cycle a stale "fullscreen" class can persist on the player (or its
+    // shadow host) and collapse the layout to zero height (black screen with audio). Re-check a
+    // few times and remove /fullscreen/i classes that were NOT present at entry (session-added),
+    // on both the element and its shadow host, with per-target entry-class and natural-size guards.
     (function () {
       var exitEl = el;
       function checkCollapse() {
@@ -648,12 +629,11 @@
 
   // ------------------------------------------------------------------ player frame pinning
   //
-  // On the PowerVR GPU (Fire TV) the video layer inside a cross-origin player iframe is
-  // only composited when the iframe is position:fixed. In normal mode (position:absolute)
-  // the video renders black even though it is playing. So we pin the player iframe to
-  // position:fixed and add a scroll handler that repositions it as the page scrolls, so it
-  // still appears to scroll normally. Disabled while CSS fullscreen is active (the
-  // cssFsEnter logic owns the iframe then). Top frame only; a no-op in child frames.
+  // On the PowerVR GPU (Fire TV) the video layer inside a cross-origin player iframe is only
+  // composited when the iframe is position:fixed; otherwise it renders black even though playing.
+  // So we pin the player iframe to position:fixed and reposition it on scroll so it still appears
+  // to scroll normally. Disabled while CSS fullscreen is active (cssFsEnter owns the iframe then);
+  // top frame only.
   var playerPin = { frame: null, docLeft: 0, docTop: 0, scrollHandler: null, timer: 0 };
 
   function pinPlayerFrame() {
@@ -709,11 +689,10 @@
     playerPin.timer = setInterval(pinPlayerFrame, 1000);
   }
 
-  // Dead-video auto-retry: if the player's video never loads (stays 0x0 / readyState=0
-  // for ~8s — the HLS segment fetch failed, e.g. a flaky CDN), reload the page once to
-  // retry. The video element itself is 0x0, so we detect a "player" by the video's
-  // container being a reasonable size (>= 200x150), not the video's own rect. Bounded by a
-  // localStorage cooldown so a hard-down CDN doesn't cause an infinite reload loop.
+  // Dead-video auto-retry: if the player's video never loads (stays 0x0 / readyState=0 for ~8s —
+  // the HLS segment fetch failed, e.g. a flaky CDN), reload the page once to retry. The video
+  // element itself is 0x0, so a "player" is detected by its container being >= 200x150. Bounded
+  // by a localStorage cooldown so a hard-down CDN doesn't cause an infinite reload loop.
   function installDeadVideoRetry() {
     if (window.__deadVideoRetryInstalled) return;
     window.__deadVideoRetryInstalled = true;
@@ -787,13 +766,10 @@
       // clock must restart, or a fresh element inherits a stale timer and reloads early.
       if (v !== timerVideo) { timerVideo = v; deadSince = 0; ns2Since = 0; }
       if (v.networkState === 2) {
-        // Actively loading = the player's own CDN failover is in progress.
-        // Don't reload during the first NS2_MS (let the failover walk its CDN list —
-        // an 8s reload was resetting it to CDN #1 every cycle on one portal).
-        // Bounded retry: if the ns=2 dead state persists past NS2_MS, reload once
-        // (self-heal in case a CDN recovered). NS2_MS (120s) is well beyond the
-        // observed failover time (~4s best, ~60s worst), so this does not reset a
-        // still-in-progress failover.
+        // Actively loading = the player's own CDN failover is in progress. Don't reload during
+        // the first NS2_MS (an 8s reload was resetting the failover to CDN #1 every cycle on one
+        // portal). If the ns=2 dead state persists past NS2_MS (120s, well beyond the observed
+        // ~4-60s failover time), reload once as a self-heal.
         if (!ns2Since) ns2Since = Date.now();
         deadSince = 0;
         if (Date.now() - ns2Since >= NS2_MS) {
@@ -815,13 +791,11 @@
   }
 
   // Player controls auto-hide in full screen. The player's own CSS only hides them on pointer
-  // idle; a TV remote is not a pointer, so on sites like the lazy-load poster site, the controls (and the big
-  // centre play/pause button) stay up forever. While the video is full screen we dispatch a
-  // synthetic mousemove on the video every 1.5 s — the same pointer activity a mouse would
-  // produce, which makes the player's own idle logic hide the controls. No CSS, no class
-  // changes, no site styling: we only feed the player the activity it already expects.
-  // The pause button is a child of the control bar, so it hides with the bar.
-  // Gated behind the poster-grid site guard below: the poster-grid site's player must not get synthetic input.
+  // idle; a TV remote is not a pointer, so on some sites the controls (and the big centre
+  // play/pause button) stay up forever. While full screen we dispatch a synthetic mousemove on
+  // the video every 1.5 s — the pointer activity the player's own idle logic expects (no CSS or
+  // class changes). The pause button is a child of the control bar, so it hides with the bar.
+  // Gated behind the poster-grid site guard: its player must not get synthetic input.
   function installControlsAutoHide() {
     if (window.__fbAutoHideInstalled) return;
     window.__fbAutoHideInstalled = true;
@@ -861,12 +835,10 @@
     }
     function schedule() {
       if (timer) return;
-      // A few pokes are enough to start the idle timer on players whose controls
-      // stay up forever without a pointer event (the lazy-load poster site-style). Poking
-      // continuously instead keeps resetting the idle timer on players that
-      // auto-hide on their own, so their controls — and the
-      // center play/pause button — never go away. Poke a bounded number of times,
-      // then stop and let the player's own idle logic take over.
+      // A few pokes are enough to start the idle timer on players whose controls stay up forever
+      // without a pointer event. Poking continuously would keep resetting the idle timer on
+      // players that auto-hide on their own, so their controls never go away. Poke a bounded
+      // number of times, then stop and let the player's own idle logic take over.
       var pokes = 0;
       var maxPokes = 2;
       timer = setInterval(function () {
@@ -898,20 +870,16 @@
 
   // ------------------------------------------------------------------ stale pointer guard
   //
-  // Chromium remembers the last real pointer position and re-runs hit-testing at that
-  // position whenever an element's pointer-events (or layout) changes. On a TV the last
-  // position is wherever the user last touched the screen — often over the player's
-  // bottom control bar. When the player's own idle timer hides the bar (adding
-  // player-fade-out, which sets pointer-events:none), the hit-test at the stale position
-  // now lands on the video, and the browser fires a TRUSTED mouseout/mouseleave on the
-  // bar. The player's bottom bar treats mouseleave as "re-show the controls" (its scrub-release
-  // path), so the bar re-appears ~30 ms after every auto-hide and the 3 s timer restarts:
-  // the controls flicker forever.
+  // Chromium re-runs hit-testing at the last real pointer position whenever an element's
+  // pointer-events change. On a TV that position is often over the player's bottom control bar:
+  // when the bar hides (player-fade-out sets pointer-events:none), the stale hit-test lands on
+  // the video and the browser fires a TRUSTED mouseout/mouseleave on the bar, which the player
+  // treats as "re-show the controls" — the bar re-appears ~30 ms after every auto-hide and the
+  // controls flicker forever.
   //
-  // While CSS fullscreen is active we swallow mouseout/mouseleave on the control bars
-  // that arrive within 500 ms of a fade-out class change with no real pointer activity in
-  // between — the artifact's exact signature. Real pointer input (a tap, a drag, a mouse
-  // move) updates lastRealAt and is never swallowed.
+  // While CSS fullscreen is active we swallow mouseout/mouseleave on the control bars within 500 ms
+  // of a fade-out class change with no real pointer activity in between (the artifact's signature);
+  // real pointer input updates lastRealAt and is never swallowed.
   var staleGuard = { el: null, handler: null, realPtr: null, observer: null, lastFadeAt: 0, lastRealAt: 0 };
 
   function staleGuardIsBar(t) {
@@ -995,13 +963,11 @@
 
 
 
-  // The player's root: the first ancestor of the video that holds the player's own
-  // control buttons. Making THAT element CSS-fullscreen keeps the site's controls
-  // visible, and it matches (or sits inside) the container the player tracks for its
-  // fullscreen state, so the player recognizes the session. A pure size-based walk
-  // cannot stop when the video fills the viewport (every ancestor is the same size)
-  // and ends at the page wrapper, so the button check is the primary signal; the
-  // size walk remains the fallback for players without in-page buttons.
+  // The player's root: the first ancestor of the video that holds the player's own control
+  // buttons. Making THAT element CSS-fullscreen keeps the site's controls visible and matches
+  // the container the player tracks for its fullscreen state, so the player recognizes the
+  // session. A pure size-based walk cannot stop when the video fills the viewport, so the
+  // button check is the primary signal; the size walk remains the fallback.
   function playerContainer(v) {
     var r = v.getBoundingClientRect();
     var area = r.width * r.height;
@@ -1200,11 +1166,9 @@
       });
     },
 
-    // Diagnostic: the full element stack at a tap point, top (frontmost) to bottom.
-    // document.elementsFromPoint returns the elements that would receive a pointer event
-    // at (x, y), frontmost first. The FIRST entry is what actually eats the tap. If that is
-    // not a button / control / video, something is covering the player UI. This names the
-    // exact ad layer so killOverlays() can target it instead of guessing.
+    // Diagnostic: the full element stack at a tap point, frontmost first (document.elementsFromPoint).
+    // The FIRST entry is what actually eats the tap; if it is not a button/control/video, something
+    // is covering the player UI. This names the exact ad layer so killOverlays() can target it.
     tapStack: function (x, y) {
       var out = [];
       try {
@@ -1251,13 +1215,11 @@
       });
     },
 
-    // Ask every same-origin iframe to capture its own tap stack at the equivalent point,
-    // and return them all. Cross-origin iframes cannot be reached (the ad layer lives in a
-    // cross-origin frame), so for those we report the iframe's own rect so the app can
-    // confirm the tap fell inside it. This is how we see inside the vidcore player frame.
+    // Ask every same-origin iframe for its own tap stack at the equivalent point, and return them
+    // all. Cross-origin iframes cannot be reached (the ad layer lives in one), so for those we
+    // report the iframe's rect so the app can confirm the tap fell inside it.
     tapStackAll: function (x, y) {
       var result = { ok: 1, x: Math.round(x), y: Math.round(y), frames: [] };
-      // This frame's own stack.
       try {
         var self = JSON.parse(this.tapStack(x, y));
         result.self = self;
@@ -1279,7 +1241,6 @@
           var cw = f.contentWindow;
           var cd = f.contentDocument;
           if (cw && cd) {
-            // Same-origin: we can reach in directly.
             var fx = x - r.left, fy = y - r.top;
             var fb = cw.__fb;
             if (fb && typeof fb.tapStack === 'function') {
@@ -1540,7 +1501,6 @@
   }
 
   function pickPreferredLevel(levels) {
-    // levels: array of {height, ...} from HLS.js or similar
     if (!levels || !levels.length) return -1;
     // Sort by preference: exact matches first (in order), then closest below, then closest above
     var scored = [];
@@ -1552,7 +1512,6 @@
         if (h === qualityPreference[p]) { score = p; break; }
       }
       if (score === 10000) {
-        // Not an exact match: distance from closest preferred level
         var minDist = Infinity;
         for (var q = 0; q < qualityPreference.length; q++) {
           var d = Math.abs(h - qualityPreference[q]);
@@ -1625,7 +1584,6 @@
           var o;
           try { o = window[key]; } catch (e) { continue; }
           if (!o || typeof o !== 'object') continue;
-          // HLS.js instance
           if (o.levels && Array.isArray(o.levels) && typeof o.loadSource === 'function') {
             applyQualityHls(o);
             found = true;
@@ -1637,20 +1595,16 @@
           }
         }
       } catch (e) { /* ignore */ }
-      // Also check for Shaka in the shaka namespace (shaka.player.Instance)
       try {
         if (window.shaka && window.shaka.player) {
-          // Shaka instances are often stored in arrays or can be found via the player element
           var video = document.querySelector('video');
           if (video) {
-            // Check if the video element has a Shaka player attached
             var shakaPlayer = video.shakaPlayer || video.__shakaPlayer;
             if (shakaPlayer && typeof shakaPlayer.getVariantTracks === 'function') {
               applyQualityShaka(shakaPlayer);
               found = true;
             }
           }
-          // Check common global player variables
           var commonNames = ['player', 'shakaPlayer', 'videoPlayer', 'streamPlayer'];
           for (var ci = 0; ci < commonNames.length; ci++) {
             var p = window[commonNames[ci]];
@@ -1668,10 +1622,10 @@
   // (quality scan listener is registered after the poster-grid site guard below)
 
   // ------------------------------------------------------------------ one video at a time
-  // Weak TV hardware has room for one video decoder. When a hidden preview, an ad and the real
-  // player all start together you get two sound tracks and a black picture. The app says (through
-  // the Buccaneer bridge, which exists in every frame) whether this is switched on and which frame
-  // started a real player last; every frame then stops its own media when another frame took over.
+  // Weak TV hardware has room for one video decoder; when a hidden preview, an ad and the real
+  // player all start together you get two sound tracks and a black picture. The app says (via the
+  // Buccaneer bridge, present in every frame) whether this is on and which frame started a real
+  // player last; every frame then stops its own media when another frame took over.
   var documentId = bridgeCall('currentDocument') || '';
   var frameId = documentId + ':' + String(Math.random()).slice(2) + '-' + String(new Date().getTime());
 
@@ -1703,40 +1657,25 @@
     } catch (e) { /* ignore */ }
   }
 
-  // the poster-grid site: suppress the player's auto-fullscreen. The poster-grid site watch page calls
-  // requestFullscreen() on the player container when playback starts, which triggers
-  // native fullscreen. The video should stay inline until the user clicks the player
-  // or the menu button. So we block requestFullscreen() calls that happen within a
-  // short window after page load / each play event (the auto calls), and allow later
-  // calls (user-initiated).
-  //
-  // Minimal by design: one capture-phase 'play' listener + one prototype modification.
-  // No timers, no continuous polling — to avoid the PowerVR GPU crash that heavier
-  // instrumentation triggers on the poster-grid site.
+  // the poster-grid site: suppress the player's auto-fullscreen. The watch page calls
+  // requestFullscreen() on the player container when playback starts (native fullscreen); the
+  // video should stay inline until the user clicks the player or the menu button. So we block
+  // requestFullscreen() within a short window after page load / each play event (the auto calls)
+  // and allow later calls (user-initiated). Minimal by design: one capture-phase 'play' listener
+  // + one prototype modification; no timers/polling — to avoid the PowerVR GPU crash.
   if (__isFlixer) {
     (function installFlixerPlayerFixes() {
       if (window.__fbFlixerPlayerFixes) return;
       window.__fbFlixerPlayerFixes = true;
 
-      // Player fixes. Passive event listeners only — no timers, no continuous
-      // polling — to avoid the PowerVR GPU crash that heavier instrumentation triggers.
-      //
-      //  (1) No auto-fullscreen: the player auto-enters native fullscreen ~1s after the
-      //      video starts playing (a setTimeout in its play function), which "locks" the
-      //      player (the D-pad remaps to seek/volume and the pointer is trapped). We block
-      //      requestFullscreen() calls that happen shortly after a 'play' event, UNLESS the
-      //      user just clicked a control-bar button (within 800ms) — which indicates a
-      //      user-initiated fullscreen (the fullscreen button is a control-bar button).
-      //  (2) Menus open on click, not hover: the player's menus (server/episode/settings)
-      //      open on 'onMouseEnter' (hover). On a TV the cursor generates hover events, so
-      //      the menus open unexpectedly as the cursor passes over them. We stop 'mouseover'
-      //      on the control-bar buttons so React's 'onMouseEnter' does not fire; the menus
-      //      still open on click (their 'onClick' handlers are untouched).
-      //  (3) Auto-try next source on failure: the player has its own auto-switch (switch to
-      //      the next server when one fails). We add a minimal retry as a safety net for the
-      //      case where there is no other server: if the video errors and is not playing,
-      //      re-play it after 3s (max 3 retries). The retry is cancelled as soon as the
-      //      video plays (the auto-switch or the retry succeeded).
+      // Player fixes. Passive event listeners only — no timers/polling — to avoid the PowerVR
+      // GPU crash that heavier instrumentation triggers.
+      //  (1) No auto-fullscreen: the player auto-enters native fullscreen ~1s after play, which
+      //      "locks" it (D-pad remaps, pointer trapped). Block requestFullscreen() shortly after
+      //      a 'play' event, UNLESS the user just clicked a control-bar button (within 800ms).
+      //  (2) Menus open on hover ('onMouseEnter'), misfiring on a TV. (Fix reverted — below.)
+      //  (3) Auto-try next source on failure: if the video errors and is not playing, re-play
+      //      after 3s (max 3 retries); cancelled as soon as it plays.
 
       var lastPlayTime = 0;
       var lastCtrlClickTime = 0;
@@ -1778,13 +1717,9 @@
         };
       }
 
-      // (2) Menus open on click, not hover.
-      //
-      // REVERTED (2026-10-27): all hover-fix attempts broke video playback (the
-      // menu-detection logic accidentally triggered control-bar buttons). Removed
-      // entirely per user direction — video reliability takes priority. The menus
-      // will open on hover again (the site's default behavior). A correct fix will
-      // be attempted later with a safer approach.
+      // (2) Menus open on click, not hover: REVERTED — all hover-fix attempts broke video
+      // playback (the menu-detection logic accidentally triggered control-bar buttons). Menus
+      // open on hover again (the site's default); a safer fix may be attempted later.
 
       // (3) Auto-try next source on failure (safety net).
       function attachVideoRetry(v) {
@@ -1821,14 +1756,14 @@
     })();
   }
 
-  // Auto-unmute on video start: when a video begins playing, make sure it is not muted.
-  // This is the user's requirement that video is not muted when it starts, on all sites.
+  // Auto-unmute on video start: when a video begins playing, make sure it is not muted — the
+  // user's requirement that video is not muted when it starts, on all sites.
   //
   // Minimal by design: one capture-phase 'play' listener (the same pattern the poster-grid
-  // fullscreen guard above uses). No timers, no continuous polling — so it does not add
-  // the GPU/CPU load that triggers the PowerVR crash on the poster-grid site. It only acts
-  // once per play event (setting muted=false is a no-op if already unmuted), and it never mutes.
-  // Placed before the poster-grid early-return below so it is installed on every site.
+  // fullscreen guard above uses); no timers or polling, so it adds none of the GPU/CPU load
+  // that triggers the PowerVR crash. It acts once per play event (muted=false is a no-op if
+  // already unmuted) and never mutes. Placed before the poster-grid early-return so it is
+  // installed on every site.
   (function installAutoUnmute() {
     if (window.__fbAutoUnmuteInstalled) return;
     window.__fbAutoUnmuteInstalled = true;
@@ -1839,11 +1774,11 @@
     }, true);
   })();
 
-  // the poster-grid site: stop here. The passive __fb API above is available for explicit Android-driven
-  // commands (video controls, typing). Everything below installs continuous capture-phase
-  // event listeners, media health timers, HLS constructor hooks, and synthetic click
-  // forwarding — all of which add GPU/CPU load that triggers the PowerVR driver crash
-  // during the poster-grid site's intro animation.
+  // the poster-grid site: stop here. The passive __fb API above is available for explicit
+  // Android-driven commands (video controls, typing). Everything below installs continuous
+  // capture-phase event listeners, media health timers, HLS constructor hooks, and synthetic
+  // click forwarding — all of which add the GPU/CPU load that triggers the PowerVR driver
+  // crash during the poster-grid site's intro animation.
   if (__isFlixer) return;
 
   // Dead-video auto-retry: reload once if the player's video never loads (flaky CDN).
@@ -1853,8 +1788,9 @@
   // in normal mode (it only composites when the iframe is position:fixed).
   installPlayerPin();
 
-  // Auto-hide the player's controls in full screen (the lazy-load poster site and similar): synthetic pointer
-  // activity on the video, driven by the player's own idle logic. Not installed on the poster-grid site.
+  // Auto-hide the player's controls in full screen (the lazy-load poster site and similar):
+  // synthetic pointer activity on the video, driven by the player's own idle logic. Not
+  // installed on the poster-grid site.
   //
   // YouTube (and other show-on-activity players) do the OPPOSITE of hide-on-idle: any pointer
   // activity re-shows the controls, which then hide after ~3 s. Our 1.5 s mousemove fires before
@@ -1882,9 +1818,9 @@
       };
     }
     // The legacy media API also triggers native fullscreen. Players on Android try
-    // video.webkitEnterFullscreen() BEFORE requestFullscreen(), and on this WebView the
-    // method lives on HTMLVideoElement.prototype (HTMLMediaElement.prototype has none),
-    // so both prototypes must be covered or the player's first-choice path goes native.
+    // video.webkitEnterFullscreen() BEFORE requestFullscreen(), and on this WebView the method
+    // lives on HTMLVideoElement.prototype (HTMLMediaElement.prototype has none), so both
+    // prototypes must be covered or the player's first-choice path goes native.
     var mediaProtos = [window.HTMLVideoElement, window.HTMLMediaElement];
     for (var mp = 0; mp < mediaProtos.length; mp++) {
       var mpProto = mediaProtos[mp] && mediaProtos[mp].prototype;
@@ -1940,24 +1876,22 @@
     } catch (e) { /* if the document state cannot be faked, players may misbehave, but fullscreen itself still works */ }
   })();
 
-  // the cross-origin player site: remove sandbox attribute from player iframes BEFORE they load.
-  // The player checks its security context and refuses to play if sandboxed.
-  // We need to remove the sandbox attribute before the iframe navigates.
+  // the cross-origin player site: remove the sandbox attribute from player iframes BEFORE they
+  // load — the player checks its security context and refuses to play if sandboxed, so it must
+  // be removed before the iframe navigates.
   if (__isStreamCorner) installSandboxRemover();
 
-  // the cross-origin player site: remove sandbox attribute from player iframes BEFORE they load.
-  // The player checks its security context and refuses to play if sandboxed.
-  // We need to remove the sandbox attribute before the iframe navigates.
+  // the cross-origin player site: remove the sandbox attribute from player iframes BEFORE they
+  // load — the player checks its security context and refuses to play if sandboxed, so it must
+  // be removed before the iframe navigates.
   function installSandboxRemover() {
     if (window.__fbSandboxRemoverInstalled) return;
     window.__fbSandboxRemoverInstalled = true;
     
-    // Hook iframe element creation to remove sandbox attribute before navigation
     var origCreateElement = document.createElement;
     document.createElement = function(tagName) {
       var el = origCreateElement.apply(this, arguments);
       if (tagName && tagName.toLowerCase() === 'iframe') {
-        // Remove sandbox attribute immediately
         el.removeAttribute('sandbox');
         // Ensure the iframe is allowed to go fullscreen (element API requires this
         // permission for cross-origin frames; without it the player's fullscreen
@@ -1974,7 +1908,6 @@
       return el;
     };
     
-    // Also check existing iframes and remove sandbox / ensure fullscreen permission
     function removeSandboxFromIframes() {
       var iframes = document.querySelectorAll('iframe[sandbox], iframe:not([allowfullscreen])');
       for (var i = 0; i < iframes.length; i++) {
@@ -1998,7 +1931,6 @@
       }
     }
     
-    // Run immediately and on a short interval to catch dynamically added iframes
     removeSandboxFromIframes();
     var sandboxTimer = setInterval(removeSandboxFromIframes, 500);
     // Stop after 30 seconds (iframes should be loaded by then)
@@ -2015,7 +1947,6 @@
     window.__fbScErrorHiderInstalled = true;
     
     function hideErrorOverlay() {
-      // Look for the error message in the current frame
       var errorEl = document.querySelector('[class*="error"], [class*="sandbox"], [id*="error"]');
       if (errorEl && errorEl.textContent && /sandbox|remove.*attribute/i.test(errorEl.textContent)) {
         errorEl.style.display = 'none';
@@ -2023,7 +1954,6 @@
           diagnostic('sc_error_hidden', { text: errorEl.textContent.substring(0, 100) });
         }
       }
-      // Also check for overlay divs covering the video
       var overlays = document.querySelectorAll('div[style*="position: absolute"], div[style*="position:absolute"]');
       for (var i = 0; i < overlays.length; i++) {
         var o = overlays[i];
@@ -2036,10 +1966,8 @@
       }
     }
     
-    // Run on a short interval to catch the error overlay when it appears
     hideErrorOverlay();
     var errorTimer = setInterval(hideErrorOverlay, 1000);
-    // Stop after 60 seconds
     setTimeout(function() { clearInterval(errorTimer); }, 60000);
   }
 
@@ -2050,7 +1978,6 @@
   document.addEventListener('loadedmetadata', function () {
     if (!qualityScanTimer) scanForQualityPlayers();
     if (diagnosticEnabled) {
-    // Diagnostic: report what player instances are available in this frame
     diagnostic('player_scan', {
       url: window.location.href || '',
       topFrame: window.top === window ? 1 : 0,
@@ -2077,7 +2004,6 @@
     // Install diagnostics-only network hooks only when logging is enabled.
     installNetworkProbe();
     }
-    // Check for Bitmovin player instances
     if (lowQualityOn() || diagnosticEnabled) scanForBitmovin();
   }, true);
 
@@ -2085,16 +2011,13 @@
   // Scan for Bitmovin instances on window and in iframes.
   function scanForBitmovin() {
     try {
-      // Check window for Bitmovin
       var bm = window.bitmovin;
       if (bm && bm.Player) {
         diagnostic('bitmovin_found', { source: 'window.bitmovin', version: bm.Player.version || '' });
       }
-      // Check for player instances in common locations
       var players = [];
       try {
         if (window.bitmovin && window.bitmovin.Player) {
-          // Bitmovin players are often stored in arrays or objects
           for (var k in window) {
             try {
               var o = window[k];
@@ -2105,12 +2028,10 @@
           }
         }
       } catch (e) { /* ignore */ }
-      // Check document for player containers
       var containers = document.querySelectorAll('.bitmovinplayer-container, [data-bitmovin-player]');
       if (containers.length > 0) {
         diagnostic('bitmovin_container', { count: containers.length, id: containers[0].id || '' });
       }
-      // Find Bitmovin quality button in the player UI
       var qualityBtn = document.querySelector('.bitmovin-quality-menu, [class*="quality"], .bitmovin-settings-menu, [class*="settings"]');
       if (qualityBtn) {
         diagnostic('bitmovin_quality_btn', {
@@ -2119,7 +2040,6 @@
           id: qualityBtn.id || ''
         });
       }
-      // Find all buttons in the player container
       var playerContainer = document.querySelector('.bitmovinplayer-container');
       if (playerContainer) {
         var buttons = playerContainer.querySelectorAll('button, [role="button"], .bitmovin-button');
@@ -2133,7 +2053,6 @@
         }
         diagnostic('bitmovin_buttons', { count: buttons.length, buttons: btnInfo });
       }
-      // Try to set quality via Bitmovin UI: click settings, then select quality
       trySetBitmovinQuality();
       if (players.length > 0 || containers.length > 0) {
         diagnostic('bitmovin_scan', { players: players.length, containers: containers.length });
@@ -2148,23 +2067,18 @@
     try {
       var settingsBtn = document.querySelector('.bmpui-ui-settingstogglebutton');
       if (!settingsBtn) return;
-      // Click the settings button to open the menu
       settingsBtn.click();
       diagnostic('bitmovin_settings_clicked', {});
-      // Wait for the quality menu to appear, then select the preferred quality
       setTimeout(function () {
         try {
-          // Look for quality options in the settings menu
           var qualityOptions = document.querySelectorAll('.bmpui-ui-qualityoption, [class*="quality"] [class*="option"], .bmpui-ui-settingsmenu [class*="quality"]');
           if (qualityOptions.length > 0) {
             diagnostic('bitmovin_quality_options', { count: qualityOptions.length });
-            // Find the preferred quality
             var best = null;
             var bestScore = Infinity;
             for (var qi = 0; qi < qualityOptions.length; qi++) {
               var opt = qualityOptions[qi];
               var text = (opt.textContent || '').trim();
-              // Parse height from text (e.g., "720p", "1080p", "Auto")
               var m = text.match(/(\d{3,4})p?/i);
               if (m) {
                 var h = parseInt(m[1], 10);
@@ -2188,11 +2102,10 @@
     } catch (e) { /* ignore */ }
   }
 
-  // Probe network requests to understand what the MSE player downloads.
-  // COALESCED per host: a segment-heavy site (HLS/DASH) can emit thousands of
-  // per-request events in one session, which pushes other evidence out of the
-  // 2 MiB diagnostic rotation. Instead of one event per segment, aggregate per
-  // host over a 10 s window and emit a single summary (count + first/last URL +
+  // Probe network requests to understand what the MSE player downloads. COALESCED per host: a
+  // segment-heavy site (HLS/DASH) can emit thousands of per-request events in one session, which
+  // pushes other evidence out of the 2 MiB diagnostic rotation. Instead of one event per segment,
+  // aggregate per host over a 10 s window and emit a single summary (count + first/last URL +
   // method counts). Diagnostics-only; never affects page behavior.
   var __netAgg = {};
   var __netAggCap = 128;
@@ -2527,7 +2440,6 @@
     }, 40);
   }, true);
 
-  // Confirm the click listener is registered in this frame.
   if (diagnosticEnabled) {
     try {
       var b = window.Buccaneer;

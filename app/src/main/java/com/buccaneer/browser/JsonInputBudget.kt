@@ -4,9 +4,8 @@ package com.buccaneer.browser
 internal object JsonInputBudget {
     const val MAX_DEPTH = 32
 
-    // Android JSONTokener accepts unquoted literals, including embedded quotes.
-    // Only a quote at the START of a token opens a string. Treating every quote
-    // as an opener would let an unquoted a' token hide deeply nested arrays.
+    // Android JSONTokener accepts unquoted literals, including embedded quotes; only a quote at
+    // the START of a token opens a string, or an unquoted a' token could hide deeply nested arrays.
     private fun literalDelimiter(c: Char): Boolean = when (c) {
         '{', '}', '[', ']', '/', '\\', ':', ',', '=', ';', '#',
         ' ', '\t', '\n', '\r', '\u000c' -> true

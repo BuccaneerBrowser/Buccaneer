@@ -3,23 +3,13 @@ package com.buccaneer.browser
 import android.content.Context
 import android.net.Uri
 
-/** Reads a text file from app/src/main/assets. */
 fun readAsset(context: Context, name: String): String =
     context.assets.open(name).bufferedReader(Charsets.UTF_8).use { it.readText() }
 
 /**
  * Native half of the "Popup Guard - Streaming Mode" Chrome extension, ported to Android.
- *
- *  Extension piece                         ->  Where it lives in this app
- *  ------------------------------------------------------------------------------------------
- *  storage key popupGuardEnabled (def. ON)  ->  `enabled` below (SharedPreferences, default ON)
- *  popup.html / popup.js toggle + badge     ->  Menu > "Popup Guard: ON/OFF"
- *  content.js window.open override          ->  assets/popup_guard.js
- *  content.js _blank -> _self click rewrite ->  assets/popup_guard.js
- *  content.js killOverlays (every 1500 ms)  ->  assets/popup_guard.js
- *  background.js tabs.onCreated / windows.onCreated (close script-opened tabs/popups)
- *                                           ->  WebChromeClient.onCreateWindow returns false
- *  rules.json declarativeNetRequest rule    ->  blocksNavigation() + WebViewClient.shouldOverrideUrlLoading
+ * The JS half (window.open override, _blank -> _self rewrite, overlay killing) lives in
+ * assets/popup_guard.js; script-opened tabs/popups are closed via WebChromeClient.onCreateWindow.
  */
 class PopupGuard(context: Context) {
 
@@ -32,14 +22,11 @@ class PopupGuard(context: Context) {
     val enabled: Boolean
         get() = on
 
-    /** Flip the switch (persisted). Returns the new state. */
     fun toggle(): Boolean {
         on = !on
         prefs.edit().putBoolean(KEY_ENABLED, on).apply()
         return on
     }
-
-    // ---------------------------------------------------------------- protected sites
 
     private fun userDomains(): MutableSet<String> =
         HashSet(prefs.getStringSet(KEY_PROTECTED, emptySet()) ?: emptySet())
@@ -57,7 +44,6 @@ class PopupGuard(context: Context) {
         return DEFAULT_PROTECTED.any { hostMatches(h, it) }
     }
 
-    /** Add the site to (or remove it from) the list of sites whose off-site redirects are blocked. */
     fun toggleProtected(host: String) {
         val h = cleanHost(host)
         if (h.isEmpty() || isBuiltIn(h)) return
@@ -68,9 +54,8 @@ class PopupGuard(context: Context) {
     }
 
     /**
-     * Ensure a host is protected: add it to the user list if it is not already covered.
-     * Never removes. Called when a site is bookmarked, so every bookmarked site gets
-     * redirect protection without the user having to toggle it by hand.
+     * Ensure a host is protected (never removes). Called when a site is bookmarked, so every
+     * bookmarked site gets redirect protection without manual toggling.
      */
     fun protect(host: String) {
         val h = cleanHost(host)
@@ -82,16 +67,11 @@ class PopupGuard(context: Context) {
         }
     }
 
-    // ---------------------------------------------------------------- the rules.json rule
-
     /**
-     * Port of rules.json: block main-frame navigations initiated by a page on a protected domain
-     * (initiatorDomains) when the destination is a different site (excludedRequestDomains).
-     * Subdomains count as the same site, exactly like declarativeNetRequest domain matching.
-     * Only http(s) is considered, like urlFilter "|http".
-     *
-     * Navigations typed or tapped in the browser UI (address bar, bookmarks, start page) never
-     * reach shouldOverrideUrlLoading, so they are never blocked, as with the extension.
+     * Port of rules.json: block main-frame navigations from a protected domain to a different
+     * site (subdomains count as the same site; only http(s), like declarativeNetRequest).
+     * Navigations typed or tapped in the browser UI never reach shouldOverrideUrlLoading, so
+     * they are never blocked, as with the extension.
      */
     fun blocksNavigation(initiatorUrl: String?, target: Uri): Boolean {
         if (!on) return false
@@ -116,15 +96,12 @@ class PopupGuard(context: Context) {
         private const val KEY_PROTECTED = "protectedDomains"
 
         /**
-         * The domain hard-coded in the extension's rules.json (initiatorDomains / excludedRequestDomains)
-         * and content.js. To protect more sites permanently, add them here, or use the menu item
-         * "Block redirects from <site>" while visiting the site.
-         *
-         * Streaming sites are protected by default: their ad scripts redirect the MAIN FRAME to an
-         * off-site ad domain (e.g. the poster-grid site host -> ravishwalnut.qpon -> strategiboost.com). The popup
-         * guard blocks popup windows but not main-frame redirects, so these sites need the
-         * redirect-block. Same-site navigations and sub-resource loads (video, iframes) are never
-         * affected — only off-site main-frame navigations are blocked.
+         * Domains hard-coded in the extension's rules.json; add more here or via the menu item
+         * "Block redirects from <site>". Streaming sites are protected by default: their ad
+         * scripts redirect the MAIN FRAME to an off-site ad domain, and the popup guard blocks
+         * popups but not main-frame redirects, so these sites need the redirect-block. Only
+         * off-site main-frame navigations are blocked; same-site and sub-resource loads are
+         * never affected.
          */
         val DEFAULT_PROTECTED: List<String> = listOf(
             "7movies.ac",

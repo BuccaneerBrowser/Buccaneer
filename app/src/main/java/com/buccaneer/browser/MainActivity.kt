@@ -62,12 +62,7 @@ private val TRANSPARENT_PIXEL_PNG_1X1: ByteArray by lazy {
     )
 }
 
-/**
- * Synchronous image fetch for the hero-downscale intercept. Called from
- * shouldInterceptRequest (Chromium IO thread, not the main thread), so a bounded
- * blocking GET is acceptable. Returns (bytes, mimeType) or null on any failure —
- * the caller then falls back to letting the original request proceed.
- */
+/** Synchronous image fetch for the hero-downscale intercept; runs on Chromium's IO thread, so a bounded blocking GET is fine. Null on any failure → caller falls back to the original request. */
 private fun fetchImageBytes(url: String, timeoutMs: Long): Pair<ByteArray, String>? {
     return try {
         val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -122,14 +117,10 @@ fun formatTime(totalSeconds: Double): String {
 }
 
 /**
- * Fire TV browser. Everything is operated with the remote:
- *
- *  - Start page: top 10 bookmarks (or top 10 folders) as buttons; D-pad moves, Select opens.
- *  - Browsing: D-pad moves an on-screen pointer, Select clicks, pointer at the screen edge scrolls.
- *  - Keypad: Menu > Address/search, or tap a text field, or hold Select.
- *  - Video: Play/Pause, Rew/FF and volume keys control the page's video; full screen has its own keys.
- *
- * All remote keys arrive in dispatchKeyEvent() and are routed by what is on screen.
+ * Fire TV browser, operated entirely by remote: a start page of bookmark buttons; D-pad moves an
+ * on-screen pointer (Select clicks, pointer at the screen edge scrolls); keypad via Menu >
+ * Address/search, tapping a text field, or holding Select; media keys drive the page's video.
+ * All remote keys arrive in dispatchKeyEvent() and are routed by what is onscreen.
  */
 class MainActivity : Activity(), BookmarkJobs.Listener {
 
@@ -152,18 +143,14 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private lateinit var fullscreenBox: FrameLayout
     private lateinit var osd: Osd
 
-    // Dead-video-retry cooldown, keyed by the top-level page host+path (stable across
-    // iframe and top-page reloads; query-string-insensitive). Lives on the Activity so it
-    // survives page reloads and does not depend on the flaky cross-origin iframe
-    // localStorage. NOTE: lost on Activity recreation / process death — acceptable, the
-    // worst case is one extra retry after a restart.
+    // Dead-video-retry cooldown, keyed by the top-level page host+path (stable across reloads).
+    // On the Activity, not cross-origin iframe localStorage; lost on process death (worst case: one extra retry).
     private val deadVideoRetryState = HashMap<String, Long>()
     private val deadVideoRetryLock = Any()
     private val DEAD_VIDEO_RETRY_COOLDOWN_MS = 60000L
     private val DEAD_VIDEO_RETRY_MAX_ENTRIES = 50
-    // Top-level page URL, cached on the main thread (onPageStarted/onPageFinished) so the
-    // dead-video-retry cooldown key can be read off the UI thread. WebView.getUrl() must be
-    // called on the main thread; JavascriptInterface methods run on the JavaBridge thread.
+    // Top-level page URL, cached on the main thread so the retry-cooldown key can be read off
+    // the UI thread (WebView.getUrl() is main-thread-only; JavascriptInterface runs on the JavaBridge thread).
     @Volatile
     private var cachedPageUrl: String? = null
 
@@ -408,7 +395,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     // ---- redirect guard (anchor-based ad-redirect detection) ----
     // The URL the user explicitly navigated to is the "anchor". A main-frame load to a
     // different domain, with no user interaction since the anchor and within the window,
-    // is an ad redirect. Server-side 301/302 chains bypass shouldOverrideUrlLoading, so
+    // is an ad redirect; server-side 301/302 chains bypass shouldOverrideUrlLoading, so
     // they are caught here at page_started (see docs/review/blocker-redesign.md).
     private var anchorUrl: String? = null
     private var anchorAt: Long = 0L
@@ -424,20 +411,17 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var scrollRestoreJs = ""
     private var heroChurnGuardJs = ""
 
-    // TMDB image virtualization: allowlist of image URLs currently visible on a
-    // guarded poster-grid host. When such a host is the active page,
-    // image.tmdb.org requests NOT in this set get a 1x1 transparent pixel
-    // instead of the real image. This keeps the GPU texture count low enough to
-    // avoid the PowerVR KEGLReleaseRenderTarget crash.
+    // TMDB image virtualization: allowlist of image URLs currently visible on a guarded
+    // poster-grid host. Off-allowlist image.tmdb.org requests get a 1x1 transparent pixel,
+    // keeping the GPU texture count low enough to avoid the PowerVR KEGLReleaseRenderTarget crash.
     @Volatile private var tmdbAllowlist: MutableSet<String> = mutableSetOf()
     @Volatile private var onFlixerPage = false
     // True when the active page is a guarded poster-grid host (the poster-grid site or the lazy-load poster site)
     // — i.e. the TMDB image firewall (allowlist + 1x1 backstop) is active.
     @Volatile private var onImageGuardedPage = false
 
-    // Guarded poster-grid hosts: the TMDB image firewall is active on these.
-    // the poster-grid site loads a ~180-poster intro burst; the lazy-load poster site lazy-loads a large grid.
-    // Both produce enough GPU texture churn to tip the PowerVR driver over.
+    // Guarded poster-grid hosts (TMDB firewall active): both load large poster grids whose
+    // GPU texture churn tips the PowerVR driver over.
     private fun isImageGuardedHost(host: String): Boolean {
         return host == "flixer.gd" || host.endsWith(".flixer.gd") ||
             host == "flixer.su" || host.endsWith(".flixer.su") ||
@@ -446,17 +430,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         // the native 1x1 firewall blanked the home-page grid (see the image guard script).
     }
 
-    // GPU render-reset: the poster-grid site crashes (KEGLReleaseRenderTarget) when loaded
-    // after a video site (a video site/the lazy-load poster site) — residual video GPU state tips the
-    // PowerVR driver over the edge. Track the last non-poster-grid-site host so we can
-    // force a render reset when transitioning video-site -> the poster-grid site.
+    // GPU render-reset: the Flixer crashes (KEGLReleaseRenderTarget) when loaded after a video
+    // site — residual video GPU state tips the PowerVR driver over. Track the last non-Flixer host to force a reset.
     @Volatile private var lastNonFlixerHost = ""
 
-    // GPU render-reset (general): residual video GPU state accumulates across
-    // video sites and tips the PowerVR driver over the edge — frame drops after a
-    // long session, and black video (compositing fails, audio is fine). Set when a
-    // page starts real playback; consumed by a render reset on the next navigation
-    // away, so the state is cleared before the next site's video composites.
+    // GPU render-reset (general): residual video GPU state accumulates across video sites and
+    // tips the PowerVR driver over (frame drops, black video with audio). Set on real playback; consumed by a reset on the next navigation away.
     @Volatile private var videoActive = false
 
     // ---- remote pointer
@@ -541,9 +520,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         }
     }
 
-    // =====================================================================================
-    //  Lifecycle
-    // =====================================================================================
+    // Lifecycle
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -560,10 +537,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         lowQuality = prefs.getBoolean("lowQuality", true)
         exclusiveVideo = prefs.getBoolean("exclusiveVideo", true)
         crashReloadCount = prefs.getInt("crashReloadCount", 0)
-        // A clean exit means the previous session ended normally, not a crash. Reset the
-        // crash-retry budget so a normal launch never reopens lastCrashUrl — that is
-        // reserved for crash recovery only (cleanExit is false after a real crash).
-        // Read before line below clears it.
+        // A clean exit means the previous session ended normally, not a crash: reset the
+        // crash-retry budget so a normal launch never reopens lastCrashUrl. Read before the line below clears it.
         if (prefs.getBoolean("cleanExit", false)) {
             crashReloadCount = 0
             prefs.edit().putInt("crashReloadCount", 0).commit()
@@ -577,15 +552,13 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             clearCrashRecovery()
         }
         // cleanExit stays false unless the activity ends normally, so a process death that
-        // leaves it false was a crash. wasForeground tells the watchdog not to reopen an app
-        // the system killed while it was backgrounded.
+        // leaves it false was a crash. wasForeground tells the watchdog not to reopen an app killed while backgrounded.
         prefs.edit().putBoolean("cleanExit", false).putBoolean("wasForeground", true).commit()
         startWatchdog()
         softwareRendering = prefs.getBoolean("softwareRendering", false)
 
-        // Bookmark export writes to public Downloads; on API 23+ that needs the
-        // runtime WRITE_EXTERNAL_STORAGE permission. Request it up front so the
-        // user grants it once and export just works.
+        // Bookmark export writes to public Downloads; on API 23+ that needs the runtime
+        // WRITE_EXTERNAL_STORAGE permission, requested up front so export just works.
         requestStoragePermission()
 
         ui = Ui(this)
@@ -807,9 +780,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         super.onDestroy()
     }
 
-    // =====================================================================================
-    //  WebView setup
-    // =====================================================================================
+    // WebView setup
 
     // General browser: scripting is required; file access is disabled and permission requests are denied.
     @SuppressLint("SetJavaScriptEnabled")
@@ -818,13 +789,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
         s.databaseEnabled = true
-        // Autoplay without a click is ON by default (user request: video should
-        // autoplay when it loads). The primary protection against a hidden
-        // preview/ad stealing the single video decoder is the exclusive-video
-        // subsystem (page_helpers.js, exclusiveVideo pref, default ON), which
-        // pauses competing media the moment the real player plays. The gesture
-        // flag below is an optional hardening the user can re-enable via
-        // Settings > Autoplay without a click.
+        // Autoplay without a click is ON by default (user request). Protection against a hidden
+        // preview/ad stealing the single video decoder is the exclusive-video subsystem (page_helpers.js,
+        // default ON); the gesture flag is an optional hardening via Settings > Autoplay without a click.
         s.mediaPlaybackRequiresUserGesture = !autoplay
         s.useWideViewPort = true
         s.loadWithOverviewMode = true
@@ -877,34 +844,24 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 val origins = setOf("*")
                 // Do not rewrite navigator.webdriver. Keep the WebView environment unmodified
                 // for verification compatibility and predictable site behavior.
-                // Hero-carousel churn guard FIRST: it wraps window.setInterval before any
-                // other script runs, so it catches the hero carousel's 8000ms timer (and
-                // tags the app's own in-range timers by name, passing them through
-                // untouched). Browser-wide mitigation for the PowerVR hero-carousel
-                // texture-churn crash - NOT a root-cause fix; the GPU churn-limiter /
-                // driver-fix follow-up ticket is the backstop.
+                // Hero-carousel churn guard FIRST: it wraps window.setInterval before any other script
+                // runs, so it catches the hero carousel's 8000ms timer (the app's own in-range timers
+                // are tagged by name and pass through). Mitigation for the PowerVR hero-carousel
+                // texture-churn crash, not a root-cause fix.
                 WebViewCompat.addDocumentStartJavaScript(webView, heroChurnGuardJs, origins)
                 WebViewCompat.addDocumentStartJavaScript(webView, guardJs, origins)
                 WebViewCompat.addDocumentStartJavaScript(webView, helpersJs, origins)
-                // the poster-grid site TMDB image firewall. Registered at DOCUMENT START (not just on
-                // page commit) — this is the fix for the poster-grid site PowerVR crash. The guard
-                // must observe the poster grid BEFORE the poster-grid site's own scripts append the
-                // ~180 TMDB posters, so its allowlist sync runs while the burst is
-                // happening. Injecting it only from onPageCommitVisible (via
-                // evaluateJavascript) ran too late: sync() saw count:0 (images not yet
-                // laid out), the allowlist stayed empty, and the full 182-image burst
-                // still hit the GPU → SIGSEGV in KEGLReleaseRenderTarget. At document
-                // start it runs in every frame before any page script, so it catches the
-                // burst as it happens: visible posters get real textures, the off-screen
-                // ones are served 1x1 pixels by shouldInterceptRequest. The script
-                // self-guards on the poster-grid site host and is idempotent, so registering it
-                // for all origins is safe.
+                // Flixer TMDB image firewall — the fix for the Flixer PowerVR crash. Must run at
+                // DOCUMENT START, before the site's own scripts append the ~180-poster burst:
+                // injecting from onPageCommitVisible ran too late (sync saw count:0, allowlist
+                // stayed empty, the full 182-image burst hit the GPU → SIGSEGV in
+                // KEGLReleaseRenderTarget). At document start it catches the burst as it happens:
+                // visible posters get real textures, off-screen ones get 1x1 pixels from
+                // shouldInterceptRequest. Self-guarding and idempotent, so all origins is safe.
                 WebViewCompat.addDocumentStartJavaScript(webView, flixerImageGuardJs, origins)
-                // Scroll restore: some SPA portals call window.scrollTo(0,0) when hydration
-                // completes, yanking the user back to the top. Registered at document start
-                // (all origins) so it captures the native scrollTo before any page script and
-                // watches for the abrupt reset. Self-guarding and idempotent, so it is safe
-                // on every page.
+                // Scroll restore: some SPA portals scrollTo(0,0) when hydration completes, yanking the
+                // user back to the top. Document start (all origins) so it captures the native scrollTo
+                // before any page script. Self-guarding and idempotent, safe on every page.
                 WebViewCompat.addDocumentStartJavaScript(webView, scrollRestoreJs, origins)
                 scriptsAtDocumentStart = true
                 // An optional UI/theme failure must never prevent the poster-grid site's intro fix.
@@ -939,29 +896,21 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     }
 
     /**
-     * Dark mode: handled entirely by Chromium's render-client darkening (FORCE_DARK_ON,
-     * set in applyDarkMode). No CSS injection — injected style tags can trigger GPU
-     * compositing issues on the PowerVR driver (the poster-grid site crashes). The SPA portal (VitePress)
-     * doesn't get darkened because it declares color-scheme in its CSS, which makes
-     * Chromium skip render-client darkening. Known limitation. Called from both
-     * onPageCommitVisible and onPageFinished. When dark mode is off, cleans up any
-     * style tags left by older app versions.
+     * Dark mode is handled entirely by Chromium render-client darkening (FORCE_DARK_ON in
+     * applyDarkMode). No CSS injection — injected style tags trigger PowerVR GPU compositing
+     * crashes on the Flixer. The SPA portal (VitePress) declares color-scheme, so it stays light.
      */
     private fun injectDarkMode(view: WebView?) {
         if (view == null) return
-        // NO CSS injection on any page. Every attempt to force the SPA portal dark
-        // (style tag, color-scheme override) has broken the poster-grid site — PowerVR GPU
-        // crash (SIGSEGV in KEGLReleaseRenderTarget). The SPA portal stays light.
-        // Dark mode is handled entirely by Chromium render-client darkening
-        // (FORCE_DARK_ON + strategy 2 in applyDarkMode).
-        // Do NOT add any evaluateJavascript style injection here.
+        // NO CSS injection on any page: every attempt to force the SPA portal dark crashed the
+        // Flixer's PowerVR GPU (SIGSEGV in KEGLReleaseRenderTarget). Do NOT add style injection here.
     }
 
     private fun buildDesktopUa(ua: String): String {
         val match = Regex("Chrome/([0-9.]+)").find(ua)
         val version = match?.groupValues?.get(1) ?: "120.0.0.0"
-        // Desktop-layout UA for the existing Desktop site setting. This changes the
-        // reported identity only; it does not turn Android WebView into desktop Chrome.
+        // Desktop-layout UA for the Desktop site setting: changes the reported identity only;
+        // it does not turn Android WebView into desktop Chrome.
         return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$version Safari/537.36"
     }
 
@@ -1082,10 +1031,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     put("active", isFlixer)
                     put("allowlistSize", tmdbAllowlist.size)
                 })
-                // GPU render reset: the poster-grid site crashes (KEGLReleaseRenderTarget) when
-                // loaded after a video site — residual video GPU state tips the
-                // PowerVR driver over the edge. Force a render reset on the
-                // video-site -> the poster-grid site transition.
+                // GPU render reset (see lastNonFlixerHost): Flixer loaded after a video site.
                 if (isFlixer && lastNonFlixerHost.isNotEmpty()) {
                     DiagnosticLog.record(this@MainActivity, "flixer_render_reset", JSONObject().apply {
                         put("from", lastNonFlixerHost)
@@ -1110,9 +1056,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (isImageGuarded) {
                 try { view?.evaluateJavascript(flixerImageGuardJs, null) } catch (_: Throwable) { }
             }
-            // Inject the poster hover-preview guard (the poster-grid site only). Keeps the
-            // DPAD-focus-triggered floating preview hidden so the grid is
-            // navigable; posters still open on click (DPAD OK -> movie page).
+            // Inject the poster hover-preview guard (Flixer only): keeps the DPAD-focus-triggered
+            // floating preview hidden so the grid is navigable; posters still open on click.
             if (isFlixer) {
                 try { view?.evaluateJavascript(flixerPosterGuardJs, null) } catch (_: Throwable) { }
             }
@@ -1123,8 +1068,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (request != null) {
                 val url = request.url
                 // Which host actually failed (e.g. SSL net_error -202 shows up here as a failed
-                // request). Recording every failed subresource tells us whether it is the video
-                // CDN or only ad/tracker domains. The log is bounded, so noise is acceptable.
+                // request): tells us whether it is the video CDN or only ad/tracker domains.
                 val entry = JSONObject().apply {
                     put("url", DiagnosticLog.safeUrl(url.toString()))
                     put("host", url.host ?: "")
@@ -1162,13 +1106,10 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     })
                 }
             }
-            // Trailer video: the show/movie detail page embeds a looping
-            // YouTube trailer in an iframe. The continuous per-frame decode+composite
-            // is a major GPU load that tips the PowerVR driver over (the
-            // KEGLReleaseRenderTarget crash). Intercept the YouTube embed request and
-            // return a blank page so the video never loads — no DOM reflow (unlike
-            // removing the iframe, which destabilizes the compositor), just no video.
-            // Gated on a guarded host so direct YouTube navigation is unaffected.
+            // Trailer video: the detail page embeds a looping YouTube trailer in an iframe; the
+            // per-frame decode+composite is a major GPU load that tips the PowerVR driver over
+            // (KEGLReleaseRenderTarget). Intercept the embed and return a blank page — no DOM
+            // reflow (removing the iframe destabilizes the compositor). Gated on a guarded host.
             if (r != null && onImageGuardedPage) {
                 val host = r.url.host?.lowercase(Locale.US) ?: ""
                 val path = (r.url.path ?: "").lowercase(Locale.US)
@@ -1182,24 +1123,17 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     )
                 }
             }
-            // Hero downscale: the show/movie detail page loads a 4K TMDB
-            // backdrop (image.tmdb.org/t/p/original/..., 3840x2160, ~33MB GPU
-            // texture) displayed at ~945x540. That oversized texture is the single
-            // biggest GPU-memory waste on the page and a major driver of the
-            // PowerVR render-target churn that crashes under D-pad navigation
-            // (KEGLReleaseRenderTarget). Intercept the /t/p/original/ request and
-            // serve the w780 variant (~1.4MB) directly — no DOM or URL change, no
-            // allowlist interaction (we return the image ourselves, so the TMDB
-            // firewall below is bypassed for this request). On any fetch failure we
-            // fall through and let the original 4K request proceed (no regression).
+            // Hero downscale: the detail page loads a 4K TMDB backdrop (3840x2160, ~33MB GPU
+            // texture) displayed at ~945x540 — the page's biggest GPU-memory waste and a major
+            // driver of the PowerVR render-target churn crash under D-pad navigation
+            // (KEGLReleaseRenderTarget). Intercept /t/p/original/ and serve the w780 variant
+            // (~1.4MB) — no DOM/URL change, TMDB firewall below bypassed; fetch failure falls through to the original 4K.
             if (r != null && onImageGuardedPage) {
                 val host = r.url.host?.lowercase(Locale.US) ?: ""
                 val path = r.url.path ?: ""
                 if ((host == "image.tmdb.org" || host.endsWith(".tmdb.org")) && path.contains("/t/p/original/")) {
-                    // Only downscale images the firewall already allows (in the
-                    // allowlist). The hero is allowlisted when requested (that's why
-                    // it displays today), so this fires for it. Off-screen images the
-                    // firewall blocks are left alone (still get the 1x1 pixel).
+                    // Only downscale images the firewall already allows (in the allowlist): the hero
+                    // is allowlisted when requested, so this fires for it. Off-screen images are left alone.
                     if (tmdbAllowlist.contains(r.url.toString())) {
                         val smallUrl = r.url.toString().replace("/t/p/original/", "/t/p/w780/")
                         val fetched = fetchImageBytes(smallUrl, 6000L)
@@ -1217,13 +1151,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     }
                 }
             }
-            // Episode-poster downscale: the detail page's episode list
-            // loads w500 TMDB posters (500x750, ~1.5MB GPU texture each)
-            // displayed at ~180x230. 18+ posters = ~27MB GPU memory, which
-            // evicts the hero's texture (raster loss / black hero). Scrolling
-            // the episode list loads them all and accelerates the black.
-            // Intercept /t/p/w500/ and serve w185 (~0.18MB) instead — 87%
-            // GPU-memory reduction with no visible quality loss at 180px.
+            // Episode-poster downscale: the episode list loads w500 TMDB posters (500x750, ~1.5MB
+            // each) displayed at ~180x230; 18+ posters = ~27MB, which evicts the hero's texture
+            // (black hero). Intercept /t/p/w500/ and serve w185 (~0.18MB) — 87% GPU-memory reduction, no visible loss.
             if (r != null && onImageGuardedPage) {
                 val host = r.url.host?.lowercase(Locale.US) ?: ""
                 val path = r.url.path ?: ""
@@ -1245,9 +1175,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     }
                 }
             }
-            // TMDB image firewall: on a guarded poster-grid host, only allow
-            // images in the allowlist. Everything else gets a 1x1 transparent
-            // pixel to keep GPU texture count low.
+            // TMDB image firewall (see tmdbAllowlist): only allow allowlisted images;
+            // everything else gets a 1x1 pixel to keep GPU texture count low.
             if (r != null && onImageGuardedPage) {
                 val host = r.url.host?.lowercase(Locale.US) ?: ""
                 if (host == "image.tmdb.org" || host.endsWith(".tmdb.org")) {
@@ -1528,9 +1457,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 DiagnosticLog.record(this@MainActivity, if (active) "css_fullscreen_on" else "css_fullscreen_off")
                 if (active) {
                     hideCursor()
-                    // The playback heartbeat may not be fresh yet (it lands on a 2 s cadence);
-                    // retry the pointer lift once it can be, so the parked cursor over the
-                    // controls cannot pin pointer-aware players' controls visible.
+                    // The playback heartbeat may not be fresh yet (2 s cadence); retry the pointer
+                    // lift once it can be, so the parked cursor cannot pin player controls visible.
                     handler.postDelayed({
                         if (epoch == pageEpoch && cssFullscreenActive) liftPointerIfPlaying()
                     }, 3000)
@@ -1568,10 +1496,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         }
 
         /**
-         * Dead-video-retry cooldown gate. Called by page_helpers.js before reloading a dead
-         * player iframe. Returns true if a retry is allowed (and records it), false if a retry
-         * happened within the cooldown window for the current page. Keyed by the top-level page
-         * host+path (stable across iframe/top-page reloads).
+         * Dead-video-retry cooldown gate (page_helpers.js, before reloading a dead player iframe).
+         * True if a retry is allowed (and recorded); false if one happened within the cooldown window.
          */
         @JavascriptInterface
         fun canRetryDeadVideo(): Boolean {
@@ -1660,9 +1586,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                         closeKeypad()
                         return@runOnUiThread
                     }
-                    // The recorded field identity stands: the JS edit path targets
-                    // it by ID without Android focus. Only a field the app never
-                    // saw loses the typing permit.
+                    // The recorded field identity stands: the JS edit path targets it by ID without
+                    // Android focus. Only a field the app never saw loses the typing permit.
                     if (inputFieldId.isEmpty()) inputFocusConfirmed = false
                     inputFieldState = ""
                     editorSession++
@@ -1764,11 +1689,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     }
 
     /**
-     * Anchor-based ad-redirect detection. Catches server-side 301/302 redirect chains that
-     * bypass shouldOverrideUrlLoading (the native blocksNavigation never fires for them).
-     * A main-frame load to a different domain, with no user interaction since the anchor
-     * navigation and within the window, is treated as an ad redirect and the user is
-     * returned to the anchor. See docs/review/blocker-redesign.md.
+     * Anchor-based ad-redirect detection (see the redirect-guard fields above): a main-frame
+     * load to a different domain with no user interaction since the anchor, within the window,
+     * is an ad redirect — the user is returned to the anchor.
      */
     private fun maybeBlockAdRedirect(url: String?) {
         if (!prefs.getBoolean("redirectGuardEnabled", true)) return
@@ -1795,9 +1718,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (cooldown > 2000L) navigateUrl(anchor, userInitiated = false)
     }
 
-    // =====================================================================================
-    //  Navigation
-    // =====================================================================================
+    // Navigation
 
     private fun openUrl(url: String) = navigateUrl(url, userInitiated = true)
 
@@ -1852,10 +1773,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         handoffNavigation(releaseMedia = false) { webView.goBackOrForward(offset); webView.requestFocus(); showCursor() }
     }
 
-    // ---- confirm-exit-site guard: a back press that would LEAVE the current
-    // site (no in-site history, or the back entry is a different host) shows a
-    // confirm dialog instead of bailing to the start page. In-site back is
-    // untouched. Toggle: Menu > "Confirm site exit".
+    // ---- confirm-exit-site guard: a back press that would LEAVE the current site (no
+    // in-site history, or the back entry is a different host) shows a confirm dialog instead
+    // of bailing to the start page. In-site back is untouched. Toggle: Menu > "Confirm site exit".
     private fun backWouldExitSite(): Boolean {
         val currentUrl = webView.url ?: lastPageUrl
         val currentHost = hostOf(currentUrl)
@@ -1950,14 +1870,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             if (current()) {
                 // Script completion/timeout is NOT proof of native resource release.
                 DiagnosticLog.record(this, reason)
-                // GPU render reset (general): clear residual video GPU state when
-                // navigating away from a page that had real playback. The the poster-grid site
-                // reset in onPageCommitVisible only covers the video-site -> the poster-grid site
-                // edge; this covers video-site -> video-site and video-site -> other,
-                // where residual state otherwise accumulates and degrades the next
-                // video (frame drops, black surface). Fires after media teardown,
-                // before the new page loads. Same proven pauseTimers/invalidate/
-                // resumeTimers dance as the poster-grid site reset.
+                // GPU render reset (general, see videoActive): covers video-site -> video-site/other,
+                // where residual state accumulates and degrades the next video (frame drops, black surface).
                 if (videoActive) {
                     videoActive = false
                     DiagnosticLog.record(this, "video_render_reset")
@@ -2026,9 +1940,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         }
     }
 
-    // =====================================================================================
-    //  Key routing
-    // =====================================================================================
+    // Key routing
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (recoveringRenderer || activityDestroyed || !foreground) return true
@@ -2399,10 +2311,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         sendHover(cx, cy)
     }
 
-    /**
-     * Scroll the page. When the page itself scrolls we move the document; when it does not (most web
-     * apps scroll inside an element) we send mouse-wheel events, which scroll whatever is under the pointer.
-     */
+    /** Scroll the page: move the document when it scrolls itself, otherwise send mouse-wheel events that scroll whatever is under the pointer. */
     private fun scrollPage(dx: Int, dy: Int) {
         if (!pageAvailable() || !foreground) return
         scrollXPending = (scrollXPending + dx).coerceIn(-1500, 1500)
@@ -2524,10 +2433,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         val epoch = pageEpoch
         val target: View = customView ?: webView
         DiagnosticLog.record(this, "tap_dispatched", JSONObject().put("x", x).put("y", y).put("w", webView.width).put("h", webView.height))
-        // Diagnostic: capture the element stack at the tap point so we can see exactly
-        // which element eats the click. The probe runs in the top frame; if the player is
-        // in a cross-origin iframe the top-frame stack will show the <iframe> as the top
-        // element, which is itself the answer (the ad layer is inside that frame).
+        // Diagnostic: capture the element stack at the tap point to see which element eats the click.
+        // The probe runs in the top frame; for a cross-origin player frame the <iframe> is the top element.
         if (DiagnosticLog.isEnabled(this)) {
             try {
                 val script = "window.__fb ? __fb.tapStack(${x},${y}) : 'none'"
@@ -2574,11 +2481,9 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     }
 
     /**
-     * Lift the simulated mouse pointer out of the page. The browser keeps the pointer parked at
-     * the last hover position and never tells the page it is gone, so pointer-aware players (a video site)
-     * see "pointer over the controls" forever and pin their controls visible. Lifting only while
-     * video plays: while browsing, the parked pointer is what keeps hover menus open while the
-     * user reads them, so it must stay.
+     * Lift the simulated mouse pointer out of the page: the browser parks it at the last hover
+     * position and never tells the page it is gone, so pointer-aware players pin their controls.
+     * Only while video plays — while browsing the parked pointer keeps hover menus open.
      */
     private fun liftPointerIfPlaying() {
         if (!hoverActive) return
@@ -2650,9 +2555,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         }
     }
 
-    // =====================================================================================
-    //  Video: play/pause, seek, volume, full screen
-    // =====================================================================================
+    // Video: play/pause, seek, volume, full screen
 
     /** Bounded completion: native failures and deadlines cannot leave a queue busy. */
     private fun eval(script: String, callback: ((String?) -> Unit)? = null) {
@@ -2720,9 +2623,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     }
 
     /**
-     * Runs a page_helpers.js video command. It answers "ok", "frame" (the player lives in a
-     * frame from another site; that frame's own copy of the helper ran the command — except on
-     * the poster-grid site, which keeps the trusted-tap path), or "none" (no player found; send the key).
+     * Runs a page_helpers.js video command. Answers "ok", "frame" (the player's own frame ran it —
+     * except the Flixer, which keeps the trusted-tap path), or "none" (send the key).
      */
     private fun videoCommand(call: String, fallbackKey: Int, tapFrame: Boolean = false) {
         cancelPlayerWork()
@@ -2961,15 +2863,11 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         if (textMode == TextMode.PAGE) closeKeypad()
         customView = view
         customCallback = callback
-        // Defensive: if the view still has a parent (a renderer-recovery path can
-        // leave a stale customView, or the page can re-request fullscreen), remove
-        // it first — otherwise addView throws "child already has a parent" on the
-        // main thread. Mirrors the guard in destroyBrowser / disposePopup.
+        // Defensive: if the view still has a parent (stale customView from renderer recovery,
+        // or a page re-requesting fullscreen), remove it first — otherwise addView throws on the main thread.
         try { (view.parent as? ViewGroup)?.removeView(view) } catch (_: Throwable) {}
-        // Center the video in the box: the WebView's fullscreen VideoView measures to the
-        // video's own aspect ratio (a 2.39:1 film is ~1920x780 on this 16:9 screen), and
-        // FrameLayout's default top-left gravity pins it to the top with a black bar below.
-        // A same-aspect (16:9) video fills the box exactly, so the gravity is a no-op there.
+        // Center the video in the box: the fullscreen VideoView measures to the video's own aspect
+        // ratio (a 2.39:1 film is ~1920x780 here), and FrameLayout's top-left gravity would pin it to the top.
         val lp = FrameLayout.LayoutParams(MATCH, MATCH)
         lp.gravity = Gravity.CENTER
         fullscreenBox.addView(view, lp)
@@ -3088,9 +2986,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         return false
     }
 
-    // =====================================================================================
-    //  Keyboard input (the on-screen keypad)
-    // =====================================================================================
+    // Keyboard input (the on-screen keypad)
 
     private fun cancelPendingJsPrompt(): Boolean {
         val result = pendingJsPrompt ?: return false
@@ -3417,9 +3313,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         }
     }
 
-    // =====================================================================================
-    //  Menus, bookmarks
-    // =====================================================================================
+    // Menus, bookmarks
 
     private fun syncFocusBlocking() {
         val blocked = menu.shown() || listPanel.shown() || textPanel.shown()
@@ -3513,17 +3407,13 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         val url: String? = if (onStart) null else webView.url
         val items = ArrayList<MenuItem>()
 
-        // 1. Scroll submenu
         items.add(MenuItem("Scroll submenu/page with D-pad") {
             scrollMode = true
             showCursor()
             toast("D-pad scrolls under pointer; Back returns to pointer mode")
         })
-        // 2. Start page
         items.add(MenuItem("Start page") { showStartPage(false) })
-        // 3. Reload
         items.add(MenuItem("Reload") { reloadPage() })
-        // 4. Add bookmark
         if (url != null && store.contains(url)) {
             items.add(MenuItem("Remove bookmark") {
                 if (editBookmarks { store.remove(url) }) toast("Bookmark removed")
@@ -3531,19 +3421,10 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         } else {
             items.add(MenuItem("Add bookmark") { startSaveBookmark() })
         }
-        // 5. Bookmarks
         items.add(MenuItem("Bookmarks...") { showBookmarks(null, 0) })
-        // 6. Search
         items.add(MenuItem("Address / search") { promptUrl() })
-        // 7. Full screen
         items.add(MenuItem("Full-screen video") { fullscreenVideo() })
-        // 8. Fit submenus to screen — option removed from menu;
-        //    fitMenus() code kept in tv_ui.js, item kept here commented out.
-        // items.add(MenuItem("Fit open submenus to screen") {
-        //     eval("window.__tvUi ? __tvUi.fitMenus() : 0")
-        //     toast("Adjusted recognized dropdown menus")
-        // })
-        // 9. Block redirects
+        // "Fit open submenus to screen" was removed from the menu; fitMenus() code kept in tv_ui.js.
         val host: String? = if (url != null) {
             try {
                 Uri.parse(url).host
@@ -3564,11 +3445,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             prefs.edit().putBoolean("confirmSiteExit", confirmSiteExit).apply()
             toast("Confirm site exit " + (if (confirmSiteExit) "ON" else "OFF"))
         })
-        // 10. Back
         items.add(MenuItem("Back") { navigateHistory(-1) })
-        // 11. Settings
         items.add(MenuItem("Settings...") { showSettings(0) })
-        // 12. Exit browser
         items.add(MenuItem("Exit browser") { finish() })
 
         showMenu("Menu", items, null)
@@ -3641,8 +3519,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     }
 
     // ---- bookmark export / import
-    // Legacy Fire OS: public Downloads. Android 10+: document picker where available,
-    // with public MediaStore Downloads for TVs that lack a document picker.
+    // Legacy Fire OS: public Downloads. Android 10+: document picker where available, else MediaStore Downloads.
     private fun requestStoragePermission() {
         if (Build.VERSION.SDK_INT < 23 || Build.VERSION.SDK_INT > 28) return
         if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -3938,9 +3815,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         showMenu("Folder: $name", items) { showBookmarks(null, index) }
     }
 
-    // =====================================================================================
-    //  Settings, dark mode, diagnostics
-    // =====================================================================================
+    // Settings, dark mode, diagnostics
 
     /** True when this device's WebView can darken web pages at all. */
     @Suppress("DEPRECATION")
@@ -3952,20 +3827,15 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             false
         }
 
-    /**
-     * Dark mode for web pages. The app theme is dark (res/values-v29/styles.xml), so sites that ship a
-     * dark style use it, and a WebView that can darken pages does so for the rest.
-     */
+    /** Dark mode for web pages: the app theme is dark, so dark-styled sites use it; a WebView that can darken pages does so for the rest. */
     @Suppress("DEPRECATION")
     private fun applyDarkMode() {
         val s = webView.settings
         try {
-            // VERIFIED WORKING: FORCE_DARK_ON + strategy 2
-            // (PREFER_WEB_THEME_OVER_USER_AGENT_DARKENING). This is the configuration
-            // where the poster-grid site loads without crashing and a video site buttons work.
-            // Omitting setForceDarkStrategy (the render-client default) breaks the poster-grid site.
-            // The SPA portal stays light (VitePress color-scheme) — do NOT inject CSS to fix it.
-            // Every SPA portal dark-mode attempt has crashed the poster-grid site's PowerVR GPU.
+            // VERIFIED WORKING: FORCE_DARK_ON + strategy 2 (PREFER_WEB_THEME_OVER_USER_AGENT_DARKENING)
+            // is the only configuration where the Flixer loads without crashing and video-site
+            // buttons work; omitting setForceDarkStrategy breaks the Flixer. The SPA portal stays
+            // light (VitePress color-scheme) — do NOT inject CSS to fix it; every attempt crashed the PowerVR GPU.
             if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
                 WebSettingsCompat.setForceDark(s, if (darkMode) WebSettingsCompat.FORCE_DARK_ON else WebSettingsCompat.FORCE_DARK_OFF)
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {
@@ -4337,9 +4207,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         CrashLog.record(this, what, Log.getStackTraceString(e))
     }
 
-    // =====================================================================================
-    //  Small helpers
-    // =====================================================================================
+    // Small helpers
 
     private fun toast(msg: String) {
         lastToast?.cancel()

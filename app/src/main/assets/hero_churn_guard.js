@@ -4,34 +4,22 @@
  * Browser-wide mitigation for the PowerVR hero-carousel texture-churn crash.
  * NOT a root-cause fix - see the GPU churn-limiter / driver-fix follow-up ticket.
  *
- * Registered as a DOCUMENT-START script in MainActivity.installScripts()
- * (WebViewCompat.addDocumentStartJavaScript, all origins). It runs in every
- * frame BEFORE any page script, so it wraps window.setInterval before the hero
- * carousel registers its 8000ms timer.
+ * Registered as a DOCUMENT-START script in MainActivity.installScripts() (all origins);
+ * runs in every frame BEFORE any page script, so it wraps window.setInterval before the
+ * hero carousel registers its 8000ms timer.
  *
- * Root cause (verified): the hero carousel re-registers an 8000ms timer each
- * cycle and REPLACES the hero <img> nodes (childList mutations, no attribute
- * mutations). Each replacement creates/releases GPU render targets on the
- * Fire TV's PowerVR GPU, which double-frees (SIGSEGV in
- * KEGLReleaseRenderTarget) after ~4.5 min of churn. This guard stops the
- * carousel so the hero stays static.
+ * Root cause (verified): the hero carousel re-registers an 8000ms timer each cycle and
+ * REPLACES the hero <img> nodes; each replacement creates/releases GPU render targets on
+ * the Fire TV's PowerVR GPU, which double-frees (SIGSEGV in KEGLReleaseRenderTarget) after
+ * ~4.5 min of churn. This guard stops the carousel so the hero stays static.
  *
- * Mechanism (event-driven only - NO timers, NO MutationObservers, NO polling):
- *   1. Wrap window.setInterval (then seal it). In-range (5000-10000ms)
- *      non-app timers get their callback wrapped to record fire times; the
- *      app's own in-range timers (timedScan / killCatchers / netAggFlush) are
- *      tagged by name and passed through COMPLETELY UNTOUCHED (never a kill
- *      candidate). After the first kill, the carousel's source signature is
- *      calibrated and any further matching registration is BLOCKED at
- *      registration time (not scheduled, fake id returned).
- *   2. A capture-phase 'load' listener on document detects NEW hero nodes
- *      (width >= 0.4 * innerWidth) firing load. A WeakSet of already-seen
- *      hero nodes distinguishes the carousel's node REPLACEMENT from the image
- *      guard's cache-buster re-fire on an existing node.
- *   3. On a non-user-driven hero-load (no pointerdown within 2000ms), correlate
- *      the single tracked fire in the clean window (2000ms) and kill the
- *      carousel's re-registered timer (N.src === F.src) or the fired timer as
- *      fallback. Per-route kill cap = 2.
+ * Mechanism (event-driven only - NO timers, NO MutationObservers, NO polling): wrap
+ * window.setInterval (then seal it) to track in-range (5000-10000ms) non-app timers while
+ * passing the app's own timers through untouched; detect NEW hero nodes via a capture-phase
+ * 'load' listener (a WeakSet distinguishes carousel node replacement from the image guard's
+ * cache-buster re-fire); on a non-user-driven hero-load, correlate the single tracked fire
+ * in the clean window and kill the carousel's re-registered timer (or the fired timer as
+ * fallback). Per-route kill cap = 2. Details are annotated inline.
  *
  * Chromium 118 on API 25: NO `??` or `?.` operators.
  * Must never throw, never block page load, and be safe to re-inject.
@@ -187,10 +175,7 @@
     }
 
     window.setInterval = wrappedSetInterval;
-    // Seal: block a page from reassigning window.setInterval to bypass the
-    // wrapper. App timers are unaffected (they call the sealed wrapper, which
-    // tags them and forwards to the original setInterval). If the seal fails,
-    // fall back to a plain (reassignable) assignment.
+    // Seal: block a page from reassigning window.setInterval to bypass the wrapper. App timers are unaffected (they call the sealed wrapper, which tags them and forwards to the original). If the seal fails, fall back to a plain (reassignable) assignment.
     try {
       Object.defineProperty(window, 'setInterval', {
         value: wrappedSetInterval,
@@ -213,18 +198,14 @@
       window.__heroLoads = heroLoads;
       var idx = heroLoads;
 
-      // SC3 (kill ineffective): a hero-load within 40s of the last kill means
-      // the carousel is still cycling. Production form of the multi-cycle stop
-      // assertion.
+      // SC3 (kill ineffective): a hero-load within 40s of the last kill means the carousel is still cycling (production form of the multi-cycle stop assertion).
       if (lastKillT > -1e8 && (B - lastKillT) < SC3_WINDOW_MS) {
         console.warn('[hero-killer] kill ineffective; churn continues');
         diag('hero_kill_ineffective', { sinceKill: B - lastKillT });
         dump();
       }
 
-      // Non-user-driven rule: a pointerdown within USER_SHIELD_MS shields this
-      // hero-load (a user tap on the carousel arrows). TV remote D-pad emits
-      // keydown, not pointerdown, so remote navigation does NOT shield.
+      // Non-user-driven rule: a pointerdown within USER_SHIELD_MS shields this hero-load (a user tap on the carousel arrows). TV remote D-pad emits keydown, not pointerdown, so remote navigation does NOT shield.
       if (B - lastPointerDown < USER_SHIELD_MS) { return; }
 
       // Step (b): CLEAN-WINDOW CHECK (HARD GATE). Count the tracked (non-app)
@@ -297,10 +278,7 @@
       if (!t || t.tagName !== 'IMG') { return; }
       var iw = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || 0;
       if (!iw) { return; }
-      // First-pass filter (NO layout query): an image whose intrinsic width is
-      // below the hero threshold cannot be a hero, so skip it before touching
-      // getBoundingClientRect(). This avoids forcing a reflow on every poster /
-      // thumbnail load, which was blocking the main thread (ANR) on heavy pages.
+      // First-pass filter (NO layout query): an image whose intrinsic width is below the hero threshold cannot be a hero, so skip it before touching getBoundingClientRect(); this avoids forcing a reflow on every poster/thumbnail load (which blocked the main thread, ANR, on heavy pages).
       var nw = 0;
       try { nw = t.naturalWidth; } catch (e) { return; }
       if (nw < HERO_FRACTION * iw) { return; }
@@ -316,9 +294,7 @@
     document.addEventListener('pointerdown', function () { lastPointerDown = now(); }, true);
 
     // ---- 5. SPA reset --------------------------------------------------------
-    // On route change, reset the kill state so a re-entry uses kill 1 (the cap
-    // is per-route). The load/pointerdown listeners are document-level and
-    // persist across SPA navigation - no re-attachment needed.
+    // On route change, reset the kill state so a re-entry uses kill 1 (the cap is per-route). The load/pointerdown listeners are document-level and persist across SPA navigation - no re-attachment needed.
     function resetState() {
       kills.length = 0;
       blocked.length = 0;

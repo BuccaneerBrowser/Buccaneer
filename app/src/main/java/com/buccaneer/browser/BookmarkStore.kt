@@ -13,11 +13,8 @@ data class Bookmark(val title: String, val url: String, val folder: String)
 data class FolderInfo(val name: String, val count: Int)
 
 /**
- * Bookmarks live in one ordered list. "Top 10" on the start page simply means the first 10 entries
- * of that list (or the first 8 folders), and the Bookmarks screen has Move up / Move to top
- * so you decide what is on top.
- *
- * Folders have their own order. A folder exists only while it contains at least one bookmark.
+ * One ordered list: "Top 10" is simply the first 10 entries (or first 8 folders). Folders have
+ * their own order and exist only while they contain at least one bookmark.
  */
 class BookmarkStore(context: Context) {
 
@@ -33,8 +30,6 @@ class BookmarkStore(context: Context) {
         load()
         publish()
     }
-
-    // ------------------------------------------------------------------ reading
 
     fun all(): List<Bookmark> = ArrayList(published.items)
 
@@ -63,8 +58,6 @@ class BookmarkStore(context: Context) {
     fun find(url: String): Bookmark? = published.items.firstOrNull { sameUrl(it.url, url) }
 
     fun contains(url: String): Boolean = find(url) != null
-
-    // ------------------------------------------------------------------ bookmarks
 
     @Synchronized
     fun add(title: String, url: String, folder: String) {
@@ -136,8 +129,6 @@ class BookmarkStore(context: Context) {
         commit()
     }
 
-    // ------------------------------------------------------------------ folders
-
     @Synchronized
     fun renameFolder(oldName: String, newName: String) {
         val n = newName.trim()
@@ -176,8 +167,6 @@ class BookmarkStore(context: Context) {
         folderOrder.add(0, folder)
         commit()
     }
-
-    // ------------------------------------------------------------------ persistence
 
     private fun indexOf(url: String): Int = items.indexOfFirst { sameUrl(it.url, url) }
 
@@ -323,8 +312,6 @@ class BookmarkStore(context: Context) {
         tidy()
     }
 
-    // ------------------------------------------------------------------ helpers
-
     fun hasPreviousImport(): Boolean = prefs.contains("previousImport")
     @Synchronized fun undoImport(): Boolean {
         val value = prefs.getString("previousImport", null) ?: return false
@@ -370,10 +357,8 @@ class BookmarkStore(context: Context) {
         }
 
         /**
-         * Short "website name" for a new bookmark. Page titles like "Home | Netflix" or
-         * "Movie (2023) - Watch Online - 7movies" are cut down to the part that matches the
-         * site address ("Netflix", "7movies"); otherwise a short title or the host name is used.
-         * The name can be changed later with Rename.
+         * Short "website name" for a new bookmark: long page titles ("Home | Netflix") are cut
+         * down to the part matching the site address; otherwise a short title or the host name.
          */
         fun suggestName(title: String?, url: String): String {
             val host = hostOf(url)

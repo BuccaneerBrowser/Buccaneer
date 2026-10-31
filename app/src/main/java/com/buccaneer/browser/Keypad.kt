@@ -87,8 +87,6 @@ class Keypad @JvmOverloads constructor(context: Context, private val ui: Ui = Ui
         addView(hint, hlp)
     }
 
-    // ------------------------------------------------------------------ public API
-
     /** Show the keypad. [goLabel] is the text on the big action key ("GO", "ENTER", "OK"). */
     fun open(title: String, goLabel: String) {
         this.goLabel = goLabel
@@ -149,8 +147,6 @@ class Keypad @JvmOverloads constructor(context: Context, private val ui: Ui = Ui
         }
         return true
     }
-
-    // ------------------------------------------------------------------ layout
 
     private fun chars(s: String): List<KeyDef> = s.map { KeyDef(it.toString(), Kind.CHAR) }
 
@@ -238,8 +234,6 @@ class Keypad @JvmOverloads constructor(context: Context, private val ui: Ui = Ui
         }
     }
 
-    // ------------------------------------------------------------------ selection
-
     private fun select(r: Int, c: Int) {
         if (keyViews.isEmpty()) return
         val rr = Math.max(0, Math.min(r, keyViews.size - 1))
@@ -296,8 +290,6 @@ class Keypad @JvmOverloads constructor(context: Context, private val ui: Ui = Ui
         }
         build()
     }
-
-    // ------------------------------------------------------------------ typing
 
     private fun press() {
         if (rows.isEmpty()) return
