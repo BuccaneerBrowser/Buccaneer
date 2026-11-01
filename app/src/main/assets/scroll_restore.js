@@ -18,6 +18,12 @@
   // Capture the native scrollTo now, before any page script can replace window.scrollTo.
   const nativeScrollTo = window.scrollTo.bind(window);
 
+  // Track the URL at injection time. On SPA navigation (URL change), the new "page"
+  // should start at the top — don't restore the old scroll position. Only block
+  // scroll-to-top on the same URL (hydration reset).
+  const initialUrl = location.href;
+  const samePage = () => location.href === initialUrl;
+
   let lastRestoreAt = 0;
   // Diagnostic counter, incremented per restore; readable via CDP as window.__scrollRestoreCount so tests can confirm the restore ran.
   window.__scrollRestoreCount = 0;
@@ -41,8 +47,9 @@
       window.__scrollLog.push({ t: Date.now(), x: x, y: y });
       if (window.__scrollLog.length > 300) window.__scrollLog.shift();
       // Reset to the top while the user is well below: restore the previous position.
+      // Only on the same page (hydration reset) — not on SPA navigation (new page).
       const curY = window.scrollY || 0;
-      if (y <= 5 && curY > 100) restore(curY);
+      if (y <= 5 && curY > 100 && samePage()) restore(curY);
     } catch (e) {}
     return origScrollTo.apply(window, arguments);
   };
@@ -53,7 +60,7 @@
   const tick = () => {
     const y = window.scrollY || 0;
     const drop = lastY - y;
-    if (lastY > 100 && y <= 5 && drop >= 150) restore(lastY);
+    if (lastY > 100 && y <= 5 && drop >= 150 && samePage()) restore(lastY);
     lastY = y;
   };
   setInterval(tick, 100);
