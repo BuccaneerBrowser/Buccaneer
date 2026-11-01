@@ -101,6 +101,22 @@
     var cardCache = null;    // cached list of card containers
     var cardCacheTime = 0;   // when the card cache was built (ms)
 
+    // ---- Episode-row virtualization (PowerVR pressure fix, info-page overlay) ----
+    // The info-page overlay's horizontal episode row holds ~20 simultaneously-decoded
+    // TMDB posters; that tile-memory pressure is the SIGSEGV trigger. We virtualize
+    // the row's off-screen posters (strip/restore) with a churn budget, while all
+    // other overlay images (hero, backdrops) keep the v8 restore-only behavior.
+    var epRowCache = null;   // { overlay:<el|null>, rows:[...], time:ms, sig:str }
+    var bkOvSeq = 0;         // monotonic overlay-id sequence (per document)
+    var bkRowSeq = 0;        // monotonic row-id sequence (per document)
+    var epGen = 0;           // row-generation counter (per document)
+    var epRowState = null;   // { ovId, rowId, sig, firstDetectedAt, lastScrollAt,
+                             //   lastScrollLeft, postSettleMax, qualifying }
+    var epHiWaterDoc = 0;    // max epDecoded since document load (EVIDENCE ONLY)
+    var epStripTimes = [];   // rolling window of episode-row strip timestamps
+    var epLastWasHit = false; // set by findEpRows(): true = cache-hit path, false = rescan
+    var epPrevDetected = 0;   // epDetected from the previous compositor_proxy sample
+
     // ---- Flixer info-page overlay override (PowerVR crash fix) ----------------
     // While the info-page overlay (episode list, fixed inset-0 z-[100] composited
     // layer) is open, leave its elements alone: restore any already-virtualized
@@ -171,33 +187,194 @@
       } catch (e) { return null; }
     }
 
+    // ---- Episode-row virtualization: identity + signature helpers -------------
+    // Monotonic per-element IDs (v13's tag+index+class id collided on distinct
+    // elements); stable for the element's lifetime.
+    function bkOvId(el) { if (!el) { return 'none'; }
+      if (!el.__bkOvId) { bkOvSeq++; el.__bkOvId = 'ov' + bkOvSeq; }
+      return el.__bkOvId; }
+
+    function bkRowId(el) { if (!el) { return 'none'; }
+      if (!el.__bkRowId) { bkRowSeq++; el.__bkRowId = 'row' + bkRowSeq; }
+      return el.__bkRowId; }
+
+    function epCanonSrc(img) {
+      // Stable content identity, independent of the guard's own src mutations:
+      //   strip:          img.__flixerSrc = current attribute; img.src = ''
+      //   restore:        img.src = saved; img.__flixerSrc = null
+      //   placeholder fix: img.src = original + ('?'|'&') + 'r=' + ts
+      // Canonical = the LIVE src attribute when non-empty (the current content —
+      // including a site replacement made while the image is stripped), else the
+      // saved __flixerSrc; in both cases with the guard's own 'r=' cache-buster
+      // param removed.
+      var s = img.getAttribute('src') || '';
+      if (!s) { s = img.__flixerSrc || ''; }
+      var q = s.indexOf('?');
+      if (q !== -1) {
+        var parts = s.slice(q + 1).split('&');
+        var keep = [];
+        for (var i = 0; i < parts.length; i++) {
+          if (parts[i].indexOf('r=') !== 0) { keep.push(parts[i]); }
+        }
+        s = s.slice(0, q) + (keep.length ? '?' + keep.join('&') : '');
+      }
+      return s;
+    }
+
+    function epSigOf(rows) {
+      // EXACT content identity of the row's image set: per-row JSON arrays of
+      // ordered canonical srcs. The generation gate compares this string with
+      // === — NO hash in the gate. JSON.stringify makes the serialization
+      // UNAMBIGUOUS (v25 V19-1): each src is quoted, so two different source
+      // sets can never produce the same string. NO overlay div count (v17 G3):
+      // unrelated overlay structure changes must NOT reset the generation.
+      try {
+        var sig = '';
+        for (var i = 0; i < rows.length; i++) {
+          var imgs = rows[i].querySelectorAll('img');
+          var srcs = [];
+          for (var j = 0; j < imgs.length; j++) {
+            srcs.push(epCanonSrc(imgs[j]));
+          }
+          sig += JSON.stringify(srcs) + '#';
+        }
+        return sig;
+      } catch (e) { return 'err'; }
+    }
+
+    function epSigHash(sig) {
+      // Lossy 32-bit djb2 projection of the EXACT signature — telemetry only
+      // (the epSig field), never the identity gate. Compact for the 2 MiB JSONL.
+      var h = 5381;
+      for (var c = 0; c < sig.length; c++) { h = ((h << 5) + h + sig.charCodeAt(c)) | 0; }
+      return h;
+    }
+
+    function findEpRows() {
+      // Cache hit iff ALL of: same overlay node; every cached row still contained
+      // in the overlay; rows non-empty; epSigOf(rows) === cached sig; and every
+      // cached row is STILL a horizontal scroll container (overflow-x auto/scroll
+      // AND scrollWidth > clientWidth + 50). Miss => rescan the structural rule
+      // (overflow-x auto/scroll, scrollWidth > clientWidth + 50, inside the info
+      // overlay). Assign bkRowId(row) to every row on first sight.
+      var overlay = findInfoOverlay();
+      var now = Date.now();
+      if (epRowCache && epRowCache.overlay === overlay && overlay &&
+          epRowCache.rows.length > 0) {
+        var ok = true;
+        for (var i = 0; i < epRowCache.rows.length; i++) {
+          var r = epRowCache.rows[i];
+          if (!overlay.contains(r)) { ok = false; break; }
+          var cs;
+          try { cs = window.getComputedStyle(r); } catch (e) { ok = false; break; }
+          if (cs.overflowX !== 'auto' && cs.overflowX !== 'scroll') { ok = false; break; }
+          if (!(r.scrollWidth > r.clientWidth + 50)) { ok = false; break; }
+        }
+        if (ok && epSigOf(epRowCache.rows) === epRowCache.sig) {
+          epLastWasHit = true;
+          return epRowCache.rows;
+        }
+      }
+      var rows = [];
+      if (overlay) {
+        var all = overlay.querySelectorAll('div');
+        for (var j = 0; j < all.length; j++) {
+          var el = all[j];
+          var cs2;
+          try { cs2 = window.getComputedStyle(el); } catch (e) { continue; }
+          if (cs2.overflowX !== 'auto' && cs2.overflowX !== 'scroll') { continue; }
+          if (!(el.scrollWidth > el.clientWidth + 50)) { continue; }
+          bkRowId(el); // assign on first sight
+          rows.push(el);
+        }
+      }
+      epRowCache = { overlay: overlay, rows: rows, time: now, sig: epSigOf(rows) };
+      epLastWasHit = false;
+      return rows;
+    }
+
+    function isEpRowImg(img, rows) {
+      // True iff img's nearest row ancestor (walking up) is one of the cached rows.
+      if (!rows || rows.length === 0) { return false; }
+      var p = img.parentElement;
+      var depth = 0;
+      while (p && depth < 10) {
+        for (var i = 0; i < rows.length; i++) {
+          if (p === rows[i]) { return true; }
+        }
+        p = p.parentElement;
+        depth++;
+      }
+      return false;
+    }
+
+    function inRowViewport(img, row) {
+      // "Visible" iff the common intersection of the image rect, the row's clip
+      // rect, and the window rect is non-empty (image ∩ row ∩ window).
+      try {
+        var ir = img.getBoundingClientRect();
+        var rr = row.getBoundingClientRect();
+        if (ir.width <= 0 || ir.height <= 0) { return false; }
+        var x1 = Math.max(ir.left, rr.left, 0);
+        var y1 = Math.max(ir.top, rr.top, 0);
+        var x2 = Math.min(ir.right, rr.right, window.innerWidth);
+        var y2 = Math.min(ir.bottom, rr.bottom, window.innerHeight);
+        return x2 > x1 && y2 > y1;
+      } catch (e) { return false; }
+    }
+
+    function epStripAllowed() {
+      // Churn budget: max 4 episode-row strips per rolling 2 s (boundary >= 2000
+      // so the window slides exactly at 2 s boundaries). Module-level, shared
+      // across ALL sync invocations (timer, MutationObserver, deferred kicks).
+      var now = Date.now();
+      while (epStripTimes.length > 0 && now - epStripTimes[0] >= 2000) { epStripTimes.shift(); }
+      if (epStripTimes.length >= 4) { return false; }
+      epStripTimes.push(now);
+      return true;
+    }
+
     function virtualize() {
       diagVirtImgs = 0; diagVirtStripped = 0; diagVirtRestored = 0;
       try {
         var overlay = findInfoOverlay();
+        var epRows = findEpRows();
         var imgs = document.querySelectorAll('img');
         diagVirtImgs = imgs.length;
         for (var i = 0; i < imgs.length; i++) {
           var img = imgs[i];
           if (!img || img.tagName !== 'IMG') { continue; }
-          // OVERLAY OVERRIDE: open overlay — restore any already-virtualized
-          // image, never strip (strip/restore churn in the composited overlay
-          // is the suspected render-target release crash trigger).
+          // OVERLAY OVERRIDE: open overlay — non-episode-row images keep the v8
+          // restore-only behavior (strip/restore churn in the composited overlay
+          // is the suspected render-target release crash trigger); episode-row
+          // images fall through to the normal strip/restore logic below.
           if (overlay && overlay.contains(img)) {
-            if (img.__flixerSrc) {
-              img.src = img.__flixerSrc;
-              img.__flixerSrc = null;
-              virtualized--;
-              diagVirtRestored++;
-              cumRestored++;
+            if (!isEpRowImg(img, epRows)) {
+              if (img.__flixerSrc) {
+                img.src = img.__flixerSrc;
+                img.__flixerSrc = null;
+                virtualized--;
+                diagVirtRestored++;
+                cumRestored++;
+              }
+              continue;
             }
-            continue;
+            // Episode-row image: fall through to normal strip/restore logic.
           }
           // Already virtualized: src is empty, original stored on the element.
           if (img.__flixerSrc) {
             if (inViewport(img, 200)) {
-              img.src = img.__flixerSrc;
-              img.__flixerSrc = null;
+              var liveSrc = img.getAttribute('src') || '';
+              if (liveSrc && isEpRowImg(img, epRows)) {
+                // v25 B2: the site replaced the content while the image was
+                // stripped (strip set src=''; the site then set src=B). Keep the
+                // live src, drop the stale saved src. No write: the browser is
+                // already loading B.
+                img.__flixerSrc = null;
+              } else {
+                img.src = img.__flixerSrc;
+                img.__flixerSrc = null;
+              }
               virtualized--;
               diagVirtRestored++;
               cumRestored++;
@@ -207,12 +384,41 @@
           if (!isTmdbImg(img)) { continue; }
           var src = img.getAttribute('src') || '';
           if (!src) { continue; }
-          if (!inViewport(img, 200)) {
+          var isEp = isEpRowImg(img, epRows);
+          // v25.2 hysteresis: episode-row images restore at a 200px margin but
+          // only strip at a 500px margin. The 200-500px dead zone stops the
+          // decode->strip->decode oscillation that mutates src repeatedly inside
+          // the composited overlay; each mutation recomposites the layer and on
+          // PowerVR Rogue a fast burst of those crashes glBindFramebuffer
+          // (SIGSEGV fault addr 0x4, Chrome_InProcGp). Non-episode images keep
+          // the 200px strip margin (main-page fast scroll is crash-free).
+          var epStripMargin = isEp ? 500 : 200;
+          if (!inViewport(img, epStripMargin)) {
+            // Episode-row images: require TWO consecutive off-screen samples
+            // (debounce; in-view resets the counter) AND the churn budget.
+            if (isEp) {
+              img.__epOffScreen = (img.__epOffScreen || 0) + 1;
+              if (img.__epOffScreen < 2) { continue; }
+              if (!epStripAllowed()) { continue; }
+              // v25.1: never strip a pending episode-row image (naturalWidth===0).
+              // Stripping src='' while the texture allocation is still in flight
+              // cancels it mid-flight; on PowerVR Rogue that leaves the GPU in an
+              // inconsistent state and crashes glBindFramebuffer (SIGSEGV fault
+              // addr 0x4, Chrome_InProcGp) ~2s after a fast-scroll strip burst.
+              // Let the image finish decoding first; it will be stripped on a
+              // later sample once naturalWidth>1.
+              if (img.naturalWidth === 0) { continue; }
+            }
             img.__flixerSrc = src;
             img.src = '';
             virtualized++;
             diagVirtStripped++;
             cumStripped++;
+          } else if (isEp && inViewport(img, 200)) {
+            // In-view (within the 200px restore margin): reset the off-screen
+            // debounce counter. The 200-500px dead zone leaves the counter
+            // untouched, so an image there neither strips nor resets.
+            img.__epOffScreen = 0;
           }
         }
       } catch (e) { diagVirtErrors++; }
@@ -380,16 +586,99 @@
         if (now - lastCpLog >= 2000) {
           lastCpLog = now;
           var realImg = 0, emptyImg = 0, fixedImgs = 0, clippedImgs = 0;
+          // Episode-row diagnostics (v25 §2d) — counts + generation/settle metrics.
+          var epDetected = 0, epTotal = 0, epStripped = 0, epSrc = 0, epDecoded = 0,
+              epPending = 0, epPlaceholder = 0, epVisibleDecoded = 0,
+              epVisibleStripped = 0, epVisiblePending = 0, epScrolling = 0,
+              epSettleMs = 0, epPostSettleMax = 0, epQualifying = 0,
+              epOverlayId = 'none', epRowId = 'none', epSig = 0,
+              epSigMs = 0, epScanMs = 0;
+          var _tSig = Date.now();
+          var epRows = findEpRows();
+          var _tSigEnd = Date.now();
+          if (epLastWasHit) { epSigMs = _tSigEnd - _tSig; } else { epScanMs = _tSigEnd - _tSig; }
           for (var k = 0; k < imgs.length; k++) {
             var im = imgs[k];
             if (!isTmdbPoster(im)) { continue; }
             if (im.__flixerSrc) { emptyImg++; } else { realImg++; }
+            // Episode-row image counts (v25 §2d): present / stripped / live-src split.
+            if (isEpRowImg(im, epRows)) {
+              epTotal++;
+              if (im.__flixerSrc) {
+                epStripped++;
+              } else {
+                epSrc++;
+                if (im.naturalWidth > 1) { epDecoded++; }
+                else if (im.naturalWidth === 0) { epPending++; }
+                else { epPlaceholder++; }
+              }
+              // Visible split: only row images passing inRowViewport (common triple intersection).
+              if (epRows.length > 0 && inRowViewport(im, epRows[0])) {
+                if (im.__flixerSrc) { epVisibleStripped++; }
+                else if (im.naturalWidth > 1) { epVisibleDecoded++; }
+                else { epVisiblePending++; }
+              }
+            }
             var p = im.parentElement;
             if (p && p.className && typeof p.className === 'string') {
               if (p.className.indexOf('fixed') !== -1) { fixedImgs++; }
               if (p.className.indexOf('overflow-hidden') !== -1) { clippedImgs++; }
             }
           }
+          // Generation tracking + settle metrics (v25 §2a/§2d).
+          if (epRows.length > 0) {
+            epDetected = 1;
+            var _epOv = findInfoOverlay();
+            var _epOvId = bkOvId(_epOv);
+            var _epRowId = bkRowId(epRows[0]);
+            var _epSigExact = epRowCache ? epRowCache.sig : epSigOf(epRows);
+            epSig = epSigHash(_epSigExact);
+            var _isReset = false;
+            if (!epRowState) {
+              _isReset = true; // first detection
+            } else if (_epOvId !== epRowState.ovId || _epRowId !== epRowState.rowId) {
+              _isReset = true; // (a) element replaced
+            } else if (_epSigExact !== epRowState.sig) {
+              _isReset = true; // (b) exact signature changed
+            } else if (epPrevDetected === 0) {
+              _isReset = true; // (c) disappeared and reappeared
+            }
+            var _firstDet, _lastScroll, _lastScrollLeft, _postSettleMax, _qualifying;
+            if (_isReset) {
+              epGen++;
+              _firstDet = now;
+              _lastScroll = now;
+              _lastScrollLeft = epRows[0].scrollLeft;
+              _postSettleMax = 0;
+              _qualifying = 0;
+            } else {
+              _firstDet = epRowState.firstDetectedAt;
+              _lastScroll = epRowState.lastScrollAt;
+              _lastScrollLeft = epRowState.lastScrollLeft;
+              _postSettleMax = epRowState.postSettleMax;
+              _qualifying = epRowState.qualifying;
+              if (epRows[0].scrollLeft !== _lastScrollLeft) {
+                _lastScroll = now;
+                _lastScrollLeft = epRows[0].scrollLeft;
+                epScrolling = 1;
+              }
+            }
+            epSettleMs = now - Math.max(_firstDet, _lastScroll);
+            if (epSettleMs >= 15000) {
+              _qualifying++;
+              if (epDecoded > _postSettleMax) { _postSettleMax = epDecoded; }
+            }
+            if (epDecoded > epHiWaterDoc) { epHiWaterDoc = epDecoded; }
+            epRowState = { ovId: _epOvId, rowId: _epRowId, sig: _epSigExact,
+                           firstDetectedAt: _firstDet, lastScrollAt: _lastScroll,
+                           lastScrollLeft: _lastScrollLeft, postSettleMax: _postSettleMax,
+                           qualifying: _qualifying };
+            epOverlayId = _epOvId;
+            epRowId = _epRowId;
+            epPostSettleMax = _postSettleMax;
+            epQualifying = _qualifying;
+          }
+          epPrevDetected = epDetected;
           try {
             diagScrollY = (window.pageYOffset || document.documentElement.scrollTop || 0) | 0;
             diagScrollH = (document.documentElement.scrollHeight || 0) | 0;
@@ -404,7 +693,16 @@
               virtErr: diagVirtErrors, cardErr: diagCardErrors,
               syncN: diagSyncCount, scrollY: diagScrollY, scrollH: diagScrollH,
               cumStripped: cumStripped, cumRestored: cumRestored,
-              cumCardVirt: cumCardVirt, cumCardRest: cumCardRest
+              cumCardVirt: cumCardVirt, cumCardRest: cumCardRest,
+              epDetected: epDetected, epTotal: epTotal, epStripped: epStripped,
+              epSrc: epSrc, epDecoded: epDecoded, epPending: epPending,
+              epPlaceholder: epPlaceholder, epVisibleDecoded: epVisibleDecoded,
+              epVisibleStripped: epVisibleStripped, epVisiblePending: epVisiblePending,
+              epScrolling: epScrolling, epSettleMs: epSettleMs,
+              epHiWaterDoc: epHiWaterDoc, epPostSettleMax: epPostSettleMax,
+              epQualifying: epQualifying, epOverlayId: epOverlayId,
+              epRowId: epRowId, epSig: epSig, epGen: epGen,
+              epSigMs: epSigMs, epScanMs: epScanMs
             }));
           } catch (e) { /* bridge not ready */ }
         }

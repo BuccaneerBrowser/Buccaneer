@@ -1818,6 +1818,17 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         } catch (_: Throwable) { "" }
     }
 
+    /** An info page is a query-string URL on the site root path (e.g. ?tv=...&id=...). */
+    private fun isInfoPage(url: String): Boolean {
+        return try {
+            val uri = Uri.parse(url)
+            val scheme = uri.scheme?.lowercase(Locale.ROOT) ?: return false
+            if (scheme != "http" && scheme != "https") return false
+            val path = uri.path ?: ""
+            (path.isEmpty() || path == "/") && !uri.query.isNullOrEmpty()
+        } catch (_: Throwable) { false }
+    }
+
     private fun reloadPage() {
         if (!pageAvailable() || startPage.shown()) return
         val destination = webView.url ?: lastPageUrl
@@ -1974,7 +1985,12 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                     if (startPage.shown()) {
                         if (!startPage.back()) confirmExit()
                     } else {
-                        if (confirmSiteExit && backWouldExitSite()) confirmExitSite() else if (webView.canGoBack()) navigateHistory(-1) else showStartPage(false)
+                        val backFromUrl = webView.url ?: lastPageUrl
+                        if (isInfoPage(backFromUrl)) {
+                            // Info page: back goes to the site's main page, not history.
+                            val root = siteRootOf(backFromUrl)
+                            if (root.isNotEmpty()) openUrl(root) else showStartPage(false)
+                        } else if (confirmSiteExit && backWouldExitSite()) confirmExitSite() else if (webView.canGoBack()) navigateHistory(-1) else showStartPage(false)
                     }
                 }
             }

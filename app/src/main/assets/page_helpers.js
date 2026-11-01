@@ -245,10 +245,34 @@
     }
   }
 
+  // Dispatch a synthetic mousemove on a video to trigger the player's own idle logic.
+  function pokeVideo(v) {
+    try {
+      var r = v.getBoundingClientRect();
+      var cx = Math.round(r.left + r.width / 2);
+      var cy = Math.round(r.top + r.height / 2);
+      var doc = v.ownerDocument;
+      var win = doc.defaultView || window;
+      v.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true, view: win,
+        clientX: cx, clientY: cy,
+        screenX: cx, screenY: cy,
+        button: 0, buttons: 0
+      }));
+      return true;
+    } catch (e) { return false; }
+  }
+
   // Run a command on this frame's own video (called by the message listener below).
   function frameCmd(cmd, arg) {
     var t = pickTarget();
     if (!t) return 'none';
+    if (cmd === 'pokeIdle') {
+      // Trigger the player's idle logic by dispatching a synthetic mousemove on the video.
+      if (t.video) return pokeVideo(t.video) ? 'ok' : 'failed';
+      if (t.frame) return forwardToFrame(t.frame, cmd, arg) ? 'frame' : 'none';
+      return 'none';
+    }
     if (t.video) {
       try { return runOnVideo(t.video, cmd, arg); } catch (e) { return 'failed'; }
     }
@@ -807,7 +831,13 @@
         var fe = fsElement();
         if (fe) {
           if (fe.tagName === 'VIDEO') v = fe;
-          else v = fe.querySelector ? fe.querySelector('video') : null;
+          else if (fe.tagName === 'IFRAME') {
+            // Cross-origin iframe: can't reach the video inside. Forward a pokeIdle
+            // command to the iframe's own copy of this helper, which dispatches the
+            // synthetic mousemove on the video in its own document.
+            forwardToFrame(fe, 'pokeIdle', null);
+            return;
+          } else v = fe.querySelector ? fe.querySelector('video') : null;
         }
         if (!v) {
           var all = [];
@@ -819,19 +849,7 @@
         }
       } catch (e) { v = null; }
       if (!v) return;
-      try {
-        var r = v.getBoundingClientRect();
-        var cx = Math.round(r.left + r.width / 2);
-        var cy = Math.round(r.top + r.height / 2);
-        var doc = v.ownerDocument;
-        var win = doc.defaultView || window;
-        v.dispatchEvent(new MouseEvent('mousemove', {
-          bubbles: true, cancelable: true, view: win,
-          clientX: cx, clientY: cy,
-          screenX: cx, screenY: cy,
-          button: 0, buttons: 0
-        }));
-      } catch (e) { /* ignore */ }
+      pokeVideo(v);
     }
     function schedule() {
       if (timer) return;
@@ -1738,15 +1756,35 @@
           if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; retryCount = 0; }
         });
       }
+      // (4) Video centering: the GPU video layer for the top-frame <video> composites in the
+      //     top frame's DOCUMENT coordinates, not viewport coordinates. The SPA preserves the
+      //     grid's scroll position through the show->player transition, so when the video's
+      //     first frame composites the top frame is scrolled (e.g. 150px) and the video renders
+      //     clipped/offset by exactly that amount (bottom cut off, video sits high). Pin the top
+      //     frame to (0,0) for as long as a <video> is present: the player page's scroll is
+      //     otherwise useless (the video sits in a fixed inset-0 container covering the viewport).
+      //     On the grid/info pages there is no top-frame <video>, so scrolling stays free there.
+      //     Passive listeners only (no timers) to stay within the poster-grid site's GPU budget.
+      function pinIfVideo() {
+        if (window !== window.top) return;
+        if (!document.querySelector('video')) return;
+        if (window.scrollX !== 0 || window.scrollY !== 0) {
+          try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+        }
+      }
+      window.addEventListener('scroll', pinIfVideo, true);
+      pinIfVideo();
+
       var mo = new MutationObserver(function (muts) {
         for (var i = 0; i < muts.length; i++) {
           var added = muts[i].addedNodes;
           for (var j = 0; j < added.length; j++) {
             var node = added[j];
             if (node.nodeType !== 1) continue;
-            if (node.tagName === 'VIDEO') attachVideoRetry(node);
+            if (node.tagName === 'VIDEO') { attachVideoRetry(node); pinIfVideo(); }
             else if (node.querySelectorAll) {
               var vs = node.querySelectorAll('video');
+              if (vs.length) pinIfVideo();
               for (var k = 0; k < vs.length; k++) attachVideoRetry(vs[k]);
             }
           }

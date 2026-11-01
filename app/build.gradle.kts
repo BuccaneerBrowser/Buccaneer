@@ -26,8 +26,8 @@ android {
         // 22 = Android 5.1, the oldest Fire OS (Fire OS 5) that Fire TV Sticks ship with.
         minSdk = 22
         targetSdk = 33
-        versionCode = 28
-        versionName = "2.3.5"
+        versionCode = 29
+        versionName = "2.3.6"
     }
 
     signingConfigs {
