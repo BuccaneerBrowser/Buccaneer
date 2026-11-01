@@ -57,12 +57,4 @@
     lastY = y;
   };
   setInterval(tick, 100);
-
-  // New-page navigation: the browser may restore the scroll position from the previous
-  // page (e.g. bottom of the shows list). Force the scroll to top when the page finishes
-  // loading so the user starts at the top of the new page. Uses nativeScrollTo directly
-  // (bypasses the wrapper) so the restore logic doesn't intercept it.
-  window.addEventListener('load', () => {
-    try { nativeScrollTo(0, 0); } catch (e) {}
-  }, { once: true });
 })();
