@@ -268,7 +268,11 @@
     var t = pickTarget();
     if (!t) return 'none';
     if (cmd === 'pokeIdle') {
-      // Trigger the player's idle logic by dispatching a synthetic mousemove on the video.
+      // Vidbolt player: its idle logic uses a timeout that adds 'vb-hide' to #vb.
+      // Synthetic mousemove doesn't trigger it, so add the class directly.
+      var vb = document.getElementById('vb');
+      if (vb && vb.classList) { vb.classList.add('vb-hide'); return 'ok'; }
+      // Fallback: trigger the player's idle logic via synthetic mousemove.
       if (t.video) return pokeVideo(t.video) ? 'ok' : 'failed';
       if (t.frame) return forwardToFrame(t.frame, cmd, arg) ? 'frame' : 'none';
       return 'none';
