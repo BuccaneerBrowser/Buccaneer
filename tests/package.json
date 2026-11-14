@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node check-bridge.js && node check-js-extractions.js"
+  },
+  "devDependencies": {
+    "acorn": "8.15.0"
+  }
+}

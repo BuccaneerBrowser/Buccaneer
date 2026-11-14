@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Buccaneer</string>
+    <string name="keyboard_preview">%1$s|</string>
+</resources>

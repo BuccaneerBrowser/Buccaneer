@@ -1,0 +1,16 @@
+{
+  "baseline": "2c8a7d705de32b677ed41293e6c18c0b864820a0",
+  "assets": {
+    "app/src/main/assets/hero_churn_guard.js": "67396c3ad23c040a24ec5ed22c8f6da7f1b08c5bd0ad7b2bd061089ca9cc3e8b",
+    "app/src/main/assets/seek_click.js": "ddc15a4e8a8006dfcac79da671878be5bc3ea18c8d469485a05d6ec9afc67753",
+    "app/src/main/assets/canvas_bg_guard.js": "c76fc6dd73e1620c9d63b87aa0917fb5fa8fc4f55916536279319ef4bd9ea35e",
+    "app/src/main/assets/page_helpers.js": "227d0e64d5d85006e9372b444bc69f7ca24a0b4c37f0c16f96daece5c0f98a33",
+    "app/src/main/assets/scroll_restore.js": "0f86bcc8eb1ca68d7ecd6b744b54eee31dbaf959a775d2d8bac8d155e1257b59",
+    "app/src/main/assets/fmhy_theme.js": "f5cf4e3e164eda5c6503e3a5aadaf8bb9ac2ad5fa6931a7e78ce10bf311204c2",
+    "app/src/main/assets/tv_ui.js": "b11f65b2e53c63286b597c9299a18b5c29a2fd9e86d423670120dccaf99776cf",
+    "app/src/main/assets/flixer_poster_guard.js": "c9893ca0b5116f241f9b6b8816cd55c892f9d530b3900013b42b9563909735f5",
+    "app/src/main/assets/popup_guard.js": "9a5206a9e86ac78242147b391e74922c0f2ad3dc48e1be4ed467719c7d700e81",
+    "app/src/main/assets/flixer_image_guard.js": "ad14c293734b470712f28e7d5ffe92bdea6048b34e4e78735c521876f084c788",
+    "app/src/main/assets/video_layer_guard.js": "e0aa1e11ed9fe6856f42a4682e65eb81ee6d96cfe79e8f6a7c99570ba875e2b5"
+  }
+}

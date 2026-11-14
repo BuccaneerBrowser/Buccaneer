@@ -1,0 +1,175 @@
+{
+  "app/src/main/assets/popup_guard.js": [
+    {
+      "name": "scanPlayerFrames",
+      "prefix": "    // Extraction scanPlayerFrames: keep call order and work budget unchanged.\n    function scanPlayerFrames() {\n",
+      "suffix": "\n    } // End extraction scanPlayerFrames\n",
+      "call": "    scanPlayerFrames();",
+      "rewrites": []
+    },
+    {
+      "name": "inspectOverlayElement",
+      "prefix": "    // Extraction inspectOverlayElement: keep call order and work budget unchanged.\n    function inspectOverlayElement(el) {\n",
+      "suffix": "\n    } // End extraction inspectOverlayElement\n",
+      "call": "      inspectOverlayElement(els[i]);",
+      "rewrites": [
+        [
+          "      if (el === video) continue;",
+          "      if (el === video) return;"
+        ],
+        [
+          "      try { s = window.getComputedStyle(el); } catch (e) { continue; }",
+          "      try { s = window.getComputedStyle(el); } catch (e) { return; }"
+        ],
+        [
+          "      if (s.pointerEvents === 'none') continue;",
+          "      if (s.pointerEvents === 'none') return;"
+        ],
+        [
+          "      if (s.display === 'none' || s.visibility === 'hidden') continue;",
+          "      if (s.display === 'none' || s.visibility === 'hidden') return;"
+        ],
+        [
+          "      if (!floating && !(haveVideo && vr && s.position === 'relative')) continue;",
+          "      if (!floating && !(haveVideo && vr && s.position === 'relative')) return;"
+        ],
+        [
+          "      try { r = el.getBoundingClientRect(); } catch (e) { continue; }",
+          "      try { r = el.getBoundingClientRect(); } catch (e) { return; }"
+        ],
+        [
+          "        continue;",
+          "        return;"
+        ],
+        [
+          "      if (containsVideo) continue;",
+          "      if (containsVideo) return;"
+        ],
+        [
+          "      if (hasControls && !isIframeAd) continue;",
+          "      if (hasControls && !isIframeAd) return;"
+        ],
+        [
+          "      var el = els[i];",
+          "      /* candidate is the helper argument */"
+        ]
+      ]
+    },
+    {
+      "name": "logFloatingCandidate",
+      "prefix": "      // Extraction logFloatingCandidate: keep call order and work budget unchanged.\n      function logFloatingCandidate() {\n",
+      "suffix": "\n      } // End extraction logFloatingCandidate\n",
+      "call": "        logFloatingCandidate();",
+      "rewrites": []
+    },
+    {
+      "name": "logRemovedOverlay",
+      "prefix": "      // Extraction logRemovedOverlay: keep call order and work budget unchanged.\n      function logRemovedOverlay() {\n",
+      "suffix": "\n      } // End extraction logRemovedOverlay\n",
+      "call": "      logRemovedOverlay();",
+      "rewrites": []
+    }
+  ],
+  "app/src/main/assets/flixer_image_guard.js": [
+    {
+      "name": "syncOverlayState",
+      "prefix": "    // Extraction syncOverlayState: keep call order and work budget unchanged.\n    function syncOverlayState() {\n",
+      "suffix": "\n    } // End extraction syncOverlayState\n",
+      "call": "        syncOverlayState();\n",
+      "rewrites": []
+    },
+    {
+      "name": "rebuildImageAllowlist",
+      "prefix": "    // Extraction rebuildImageAllowlist: keep call order and work budget unchanged.\n    function rebuildImageAllowlist(imgs) {\n",
+      "suffix": "\n    } // End extraction rebuildImageAllowlist\n",
+      "call": "        var list = rebuildImageAllowlist(imgs);\n",
+      "rewrites": [
+        [
+          "          }\n        }\n",
+          "          }\n        }\n        return list;\n"
+        ]
+      ]
+    },
+    {
+      "name": "markOffscreenImages",
+      "prefix": "    // Extraction markOffscreenImages: keep call order and work budget unchanged.\n    function markOffscreenImages(imgs) {\n",
+      "suffix": "\n    } // End extraction markOffscreenImages\n",
+      "call": "        markOffscreenImages(imgs);\n",
+      "rewrites": []
+    },
+    {
+      "name": "logCompositorState",
+      "prefix": "    // Extraction logCompositorState: keep call order and work budget unchanged.\n    function logCompositorState(imgs, _t0) {\n",
+      "suffix": "\n    } // End extraction logCompositorState\n",
+      "call": "        logCompositorState(imgs, _t0);\n",
+      "rewrites": []
+    },
+    {
+      "name": "countCompositorImages",
+      "prefix": "          // Extraction countCompositorImages: keep call order and work budget unchanged.\n          function countCompositorImages() {\n",
+      "suffix": "\n          } // End extraction countCompositorImages\n",
+      "call": "          countCompositorImages();\n",
+      "rewrites": []
+    },
+    {
+      "name": "updateEpisodeGeneration",
+      "prefix": "          // Extraction updateEpisodeGeneration: keep call order and work budget unchanged.\n          function updateEpisodeGeneration() {\n",
+      "suffix": "\n          } // End extraction updateEpisodeGeneration\n",
+      "call": "          updateEpisodeGeneration();\n",
+      "rewrites": []
+    }
+  ],
+  "app/src/main/assets/tv_ui.js": [
+    {
+      "name": "fitOneMenu",
+      "prefix": "  // Extraction fitOneMenu: keep call order and work budget unchanged.\n  function fitOneMenu(el,h) {\n",
+      "suffix": "\n  } // End extraction fitOneMenu\n",
+      "call": "      changed+=fitOneMenu(menus[i],h);",
+      "rewrites": [
+        [
+          "      if(r.width<20||r.height<10||cs.display==='none'||cs.visibility==='hidden'||el.querySelector('video,iframe,canvas'))continue;",
+          "      if(r.width<20||r.height<10||cs.display==='none'||cs.visibility==='hidden'||el.querySelector('video,iframe,canvas'))return 0;"
+        ],
+        [
+          "      if(!wrapper || bounds.bottom-bounds.top<40 || (r.top>=bounds.top && r.bottom<=bounds.bottom))continue;",
+          "      if(!wrapper || bounds.bottom-bounds.top<40 || (r.top>=bounds.top && r.bottom<=bounds.bottom))return 0;"
+        ],
+        [
+          "        if(!safe)continue;",
+          "        if(!safe)return 0;"
+        ],
+        [
+          "      if(!isFinite(scale)||scale<=0||!isFinite(wrapperScale)||wrapperScale<=0)continue;",
+          "      if(!isFinite(scale)||scale<=0||!isFinite(wrapperScale)||wrapperScale<=0)return 0;"
+        ],
+        [
+          "      var el=menus[i],r=el.getBoundingClientRect(),cs=getComputedStyle(el);",
+          "      var r=el.getBoundingClientRect(),cs=getComputedStyle(el);"
+        ],
+        [
+          "      changed++;",
+          "      return 1;"
+        ]
+      ]
+    },
+    {
+      "name": "saveMenuScroll",
+      "prefix": "  // Extraction saveMenuScroll: keep call order and work budget unchanged.\n  function saveMenuScroll() {\n",
+      "suffix": "\n  } // End extraction saveMenuScroll\n",
+      "call": "    var positions=saveMenuScroll();\n",
+      "rewrites": [
+        [
+          "    }\n",
+          "    }\n    return positions;\n"
+        ]
+      ]
+    },
+    {
+      "name": "restoreMenuScroll",
+      "prefix": "  // Extraction restoreMenuScroll: keep call order and work budget unchanged.\n  function restoreMenuScroll(positions) {\n",
+      "suffix": "\n  } // End extraction restoreMenuScroll\n",
+      "call": "    restoreMenuScroll(positions);\n",
+      "rewrites": []
+    }
+  ]
+}

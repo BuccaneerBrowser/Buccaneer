@@ -1,0 +1,7 @@
+{
+  "baseVersion": "1.9.2",
+  "scriptSha256": {
+    "tv_ui.js": "71f7919130f71432c68bc0ac40e85c4100bb90de1a8e232f8a82734a647854f5"
+  },
+  "reason": "Qualified read-only editor snapshots; reversible clipping-aware submenu fitting. Flixer early-return remains unchanged."
+}

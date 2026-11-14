@@ -1,0 +1,98 @@
+[
+  {
+    "old": "  function pickTarget() {\n    var v = findVideo();\n    var f = bigFrame();\n    if (v && !v.paused && !v.ended) return { video: v };\n    if (v && f) return area(f) >= area(v) * 0.5 ? { frame: f } : { video: v };\n    if (v) return { video: v };\n    if (f) return { frame: f };\n    return null;\n  }\n\n  function withVideo(fn) {\n    var t = pickTarget();\n    if (!t) return 'none';\n    if (t.video) {\n      try { fn(t.video); } catch (e) { /* ignore */ }\n      return 'ok';\n    }\n    return 'frame';\n  }\n\n",
+    "new": "  // Passive selected-player identity. No new Flixer listeners or timers.\n  var selectedTarget = null;\n  function pickTarget() {\n    if (selectedTarget) {\n      var el = selectedTarget.video || selectedTarget.frame;\n      try { if (document.documentElement.contains(el) && isVisible(el)) return selectedTarget; } catch (e) {}\n      selectedTarget = null;\n    }\n    var active = document.activeElement;\n    if (active && active.tagName === 'IFRAME' && isVisible(active)) return {frame: active};\n    var v = findVideo();\n    if (v) return {video: v};\n    var f = bigFrame();\n    return f ? {frame: f} : null;\n  }\n\n  function selectAt(x, y) {\n    var el = document.elementFromPoint(x, y), node = el;\n    if (el && el.tagName === 'IFRAME') { selectedTarget = {frame:el}; return 'frame'; }\n    for (var i=0;node && i<8;i++,node=node.parentElement) {\n      if (node === document.body || node === document.documentElement) break;\n      if (node.tagName === 'VIDEO') { selectedTarget = {video:node}; return 'ok'; }\n      var videos = node.querySelectorAll ? node.querySelectorAll('video') : [];\n      if (videos.length === 1 && isVisible(videos[0])) { selectedTarget = {video:videos[0]}; return 'ok'; }\n      if (videos.length > 1) break;\n    }\n    return 'none';\n  }\n\n  function withVideo(fn) {\n    var t = pickTarget();\n    if (!t) return 'none';\n    if (t.video) {\n      try { return fn(t.video) === false ? 'failed' : 'ok'; } catch (e) { return 'failed'; }\n    }\n    return 'frame';\n  }\n\n"
+  },
+  {
+    "old": "  window.__fb = {\n    setDiagnosticLogging:",
+    "new": "  window.__fb = {\n    selectAt: function (fx,fy) { return selectAt(fx*window.innerWidth,fy*window.innerHeight); },\n    focusTarget: function () { var t=pickTarget(); if(!t)return 'none'; try{(t.frame||t.video).focus();return t.frame?'frame':'ok';}catch(e){return 'none';} },\n    setDiagnosticLogging:"
+  },
+  {
+    "old": "    seek: function (delta) {\n      return withVideo(function (v) {\n        var t = v.currentTime + delta;\n        if (isFinite(v.duration)) t = Math.min(v.duration, t);\n        v.currentTime = Math.max(0, t);\n      });\n    },\n\n",
+    "new": "    seek: function (delta) {\n      return withVideo(function (v) {\n        if (!isFinite(delta) || !isFinite(v.currentTime)) return false;\n        var wanted=Math.max(0,v.currentTime+delta);\n        if(isFinite(v.duration)) wanted=Math.min(v.duration,wanted);\n        var ranges=v.seekable;\n        if(ranges && ranges.length){\n          var inside=false,nearest=0,distance=Infinity;\n          for(var i=0;i<ranges.length;i++){\n            var a=ranges.start(i),b=ranges.end(i);\n            if(wanted>=a && wanted<=b){inside=true;break;}\n            var edge=wanted<a?a:b,d=Math.abs(edge-wanted);\n            if(d<distance){distance=d;nearest=edge;}\n          }\n          if(!inside)wanted=nearest;\n        }\n        v.currentTime=wanted;\n        return Math.abs(v.currentTime-wanted)<=1;\n      });\n    },\n\n"
+  },
+  {
+    "old": "      var out = [];\n      for (var i = 0; i < (hlsInstances || []).length; i++) {",
+    "new": "      var out = [];\n      var target = (hlsInstances && hlsInstances.length) ? pickTarget() : null;\n      for (var i = 0; i < (hlsInstances || []).length; i++) {"
+  },
+  {
+    "old": "        var h = hlsInstances[i];\n        try {\n          if (h && Array.isArray(h.levels)) {",
+    "new": "        var h = hlsInstances[i];\n        try {\n          if (!target || !target.video || h.media !== target.video) continue;\n          if (h && Array.isArray(h.levels)) {"
+  },
+  {
+    "old": "      var done = 0;\n      for (var i = 0; i < (hlsInstances || []).length; i++) {",
+    "new": "      var done = 0;\n      var target = (hlsInstances && hlsInstances.length) ? pickTarget() : null;\n      for (var i = 0; i < (hlsInstances || []).length; i++) {"
+  },
+  {
+    "old": "          if (!h || !Array.isArray(h.levels)) continue;",
+    "new": "          if (!h || !target || !target.video || h.media !== target.video || !Array.isArray(h.levels)) continue;"
+  },
+  {
+    "old": "        d: isFinite(v.duration) ? v.duration : 0,\n        v: v.volume,",
+    "new": "        d: isFinite(v.duration) ? v.duration : 0,\n        h: v.videoHeight || 0,\n        v: v.volume,"
+  },
+  {
+    "old": "  var frameId = String(Math.random()).slice(2) + '-' + String(new Date().getTime());",
+    "new": "  var documentId = bridgeCall('currentDocument') || '';\n  var frameId = documentId + ':' + String(Math.random()).slice(2) + '-' + String(new Date().getTime());"
+  },
+  {
+    "old": "          window.Buccaneer.editableClicked();",
+    "new": "          window.Buccaneer.editableClickedForDocument(documentId);"
+  },
+  {
+    "old": "          h.currentLevel = best;\n          done++;",
+    "new": "          h.currentLevel = best;\n          h.__fbManualQuality = true;\n          done++;"
+  },
+  {
+    "old": "  var playBlockedAt = 0;\n\n  function safePlay(v) {\n    try {\n      var p = v.play();\n      if (p && typeof p.catch === 'function') {\n        p.catch(function () { playBlockedAt = new Date().getTime(); });\n      }\n    } catch (e) {\n      playBlockedAt = new Date().getTime();\n    }\n  }\n\n",
+    "new": "  var playBlockedAt = 0, playBlockedVideo = null, playAttempt = 0;\n  function cancelPlayAttempt(){playAttempt++;playBlockedAt=0;playBlockedVideo=null;}\n  function safePlay(v) {\n    cancelPlayAttempt();var attempt=playAttempt;\n    function refused(){if(attempt===playAttempt && v.paused){playBlockedAt=new Date().getTime();playBlockedVideo=v;}}\n    try {\n      var p=v.play();\n      if(p && typeof p.catch==='function')p.catch(refused);\n    }catch(e){refused();}\n  }\n\n"
+  },
+  {
+    "old": "        if (v.paused || v.ended) safePlay(v); else v.pause();",
+    "new": "        if (v.paused || v.ended) safePlay(v); else {cancelPlayAttempt();v.pause();}"
+  },
+  {
+    "old": "      return (new Date().getTime() - playBlockedAt) < 1500 ? 1 : 0;",
+    "new": "      var target=pickTarget();\n      return target && target.video===playBlockedVideo && target.video.paused && playBlockedAt>0 && (new Date().getTime()-playBlockedAt)<1500 ? 1 : 0;"
+  },
+  {
+    "old": "    pause: function () {\n      var all = [];",
+    "new": "    pause: function () {\n      cancelPlayAttempt();\n      var all = [];"
+  },
+  {
+    "old": "if (isRealPlayer(playing[pi])) { bridgeCall('playbackActive'); break; }",
+    "new": "if (isRealPlayer(playing[pi])) { bridgeCall('playbackActive', documentId); break; }"
+  },
+  {
+    "old": "  var selectedTarget = null;\n",
+    "new": "  var selectedTarget = null;\n  function attachedTarget(el) {\n    try {\n      var doc=el.ownerDocument||document,win=doc.defaultView||window;\n      if(!doc.documentElement.contains(el))return false;\n      for(var depth=0;win!==window && depth<3;depth++) {\n        var frame=win.frameElement;\n        if(!frame || !isVisible(frame) || !frame.ownerDocument.documentElement.contains(frame))return false;\n        win=frame.ownerDocument.defaultView;\n      }\n      return win===window;\n    }catch(e){return false;}\n  }\n  function videoInFrame(frame) {\n    try {\n      var doc=frame.contentDocument;if(!doc)return null;\n      var all=[],best=null,score=0;collect(doc,2,all);\n      for(var i=0;i<all.length;i++)if(isVisible(all[i])){\n        var r=all[i].getBoundingClientRect(),n=r.width*r.height*((!all[i].paused&&!all[i].ended)?1.5:1);\n        if(n>score){score=n;best=all[i];}\n      }\n      return best;\n    }catch(e){return null;}\n  }\n"
+  },
+  {
+    "old": "try { if (document.documentElement.contains(el) && isVisible(el)) return selectedTarget; } catch (e) {}",
+    "new": "try { if (attachedTarget(el) && isVisible(el)) return selectedTarget; } catch (e) {}"
+  },
+  {
+    "old": "    if (active && active.tagName === 'IFRAME' && isVisible(active)) return {frame: active};",
+    "new": "    if (active && active.tagName === 'IFRAME' && isVisible(active)) {var inside=videoInFrame(active);return inside?{video:inside}:{frame:active};}"
+  },
+  {
+    "old": "    if (el && el.tagName === 'IFRAME') { selectedTarget = {frame:el}; return 'frame'; }",
+    "new": "    if (el && el.tagName === 'IFRAME') {var inside=videoInFrame(el);selectedTarget=inside?{video:inside}:{frame:el};return inside?'ok':'frame';}"
+  },
+  {
+    "old": "      var r = el.getBoundingClientRect();\n      var w = window.innerWidth || 1;\n      var h = window.innerHeight || 1;",
+    "new": "      var r = el.getBoundingClientRect();\n      var win=(el.ownerDocument && el.ownerDocument.defaultView)||window;\n      try {\n        for(var depth=0;win!==window && depth<3;depth++){\n          var frame=win.frameElement;if(!frame)return JSON.stringify({ok:0});\n          var fr=frame.getBoundingClientRect(),sx=fr.width/(frame.offsetWidth||fr.width),sy=fr.height/(frame.offsetHeight||fr.height);\n          if(!(sx>0 && sy>0))return JSON.stringify({ok:0});\n          var left=Math.max(0,r.left),right=Math.min(win.innerWidth,r.right),top=Math.max(0,r.top),bottom=Math.min(win.innerHeight,r.bottom);\n          if(right<=left||bottom<=top)return JSON.stringify({ok:0});\n          r={left:fr.left+((frame.clientLeft||0)+left)*sx,right:fr.left+((frame.clientLeft||0)+right)*sx,\n             top:fr.top+((frame.clientTop||0)+top)*sy,bottom:fr.top+((frame.clientTop||0)+bottom)*sy};\n          win=frame.ownerDocument.defaultView;\n        }\n        if(win!==window)return JSON.stringify({ok:0});\n      }catch(e){return JSON.stringify({ok:0});}\n      var w = window.innerWidth || 1;\n      var h = window.innerHeight || 1;"
+  },
+  {
+    "old": "  window.__fb = {\n",
+    "new": "  var fullscreenRequest=0;\n  window.__fb = {\n    cancelFullscreen: function () {\n      fullscreenRequest++;\n      var old=document.getElementById('__fb_fs_overlay');if(old&&old.parentNode)old.parentNode.removeChild(old);\n      return 'ok';\n    },\n"
+  },
+  {
+    "old": "    prepareFullscreen: function () {\n      var target = null;",
+    "new": "    prepareFullscreen: function () {\n      var request=++fullscreenRequest;\n      var target = null;"
+  },
+  {
+    "old": "      function handler(e) {\n        try { e.preventDefault(); e.stopPropagation(); } catch (x) { /* ignore */ }\n        if (!done) {",
+    "new": "      function handler(e) {\n        if(request!==fullscreenRequest){remove();return;}\n        try { e.preventDefault(); e.stopPropagation(); } catch (x) { /* ignore */ }\n        if (!done) {"
+  }
+]

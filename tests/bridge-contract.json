@@ -1,0 +1,131 @@
+[
+  {
+    "name": "activeInputFrame",
+    "args": [],
+    "returns": "String"
+  },
+  {
+    "name": "activeOwner",
+    "args": [],
+    "returns": "String"
+  },
+  {
+    "name": "blocked",
+    "args": [
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "canRetryDeadVideo",
+    "args": [],
+    "returns": "Boolean"
+  },
+  {
+    "name": "cssFullscreen",
+    "args": [
+      "Boolean"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "currentDocument",
+    "args": [],
+    "returns": "String"
+  },
+  {
+    "name": "diagnosticEvent",
+    "args": [
+      "String?",
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "editableBlurred",
+    "args": [
+      "String?",
+      "String?",
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "editableClicked",
+    "args": [],
+    "returns": "Unit"
+  },
+  {
+    "name": "editableClickedForDocument",
+    "args": [
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "editableFocused",
+    "args": [
+      "String?",
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "exclusiveEnabled",
+    "args": [],
+    "returns": "Boolean"
+  },
+  {
+    "name": "isDarkMode",
+    "args": [],
+    "returns": "Boolean"
+  },
+  {
+    "name": "isDiagnosticsEnabled",
+    "args": [],
+    "returns": "Boolean"
+  },
+  {
+    "name": "isGuardEnabled",
+    "args": [],
+    "returns": "Boolean"
+  },
+  {
+    "name": "lowQualityEnabled",
+    "args": [],
+    "returns": "Boolean"
+  },
+  {
+    "name": "mediaStarted",
+    "args": [
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "mediaStopped",
+    "args": [
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "pageIsForeground",
+    "args": [],
+    "returns": "Boolean"
+  },
+  {
+    "name": "playbackActive",
+    "args": [
+      "String?"
+    ],
+    "returns": "Unit"
+  },
+  {
+    "name": "tmdbAllowlist",
+    "args": [
+      "String?"
+    ],
+    "returns": "Unit"
+  }
+]

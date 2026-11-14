@@ -1,0 +1,17 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert'),acorn=require('acorn'),path=require('path');
+const source=fs.readFileSync(path.join(__dirname,'../app/src/main/assets/popup_guard.js'),'utf8');
+let node;function walk(n){if(!n||typeof n!=='object')return;if(n.type==='FunctionDeclaration'&&n.id.name==='isMovyPlayerChrome')node=n;for(const v of Object.values(n)){if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object')walk(v);}}walk(acorn.parse(source,{ecmaVersion:2018}));
+assert(node,'Missing structural protection for Movy chrome before buttons/captions hydrate');
+const shell={id:'vp-shell'},player={parentElement:shell},el={closest:q=>q==='.vp-root'?player:null};
+const context={window:{location:{hostname:'www.movy.sx'}}};vm.createContext(context);vm.runInContext(source.slice(node.start,node.end),context);
+assert.strictEqual(context.isMovyPlayerChrome(el),true,'Empty footer is already inside known player contract: no visible-DOM sampling');
+assert.strictEqual(context.isMovyPlayerChrome({...el,closest:()=>null}),false,'Sibling game ad not player chrome');
+assert.strictEqual(context.isMovyPlayerChrome({...el,closest:()=>({parentElement:{id:'other'}})}),false);
+context.window.location.hostname='movy.sx';assert.strictEqual(context.isMovyPlayerChrome(el),true);
+context.window.location.hostname='else.invalid';assert.strictEqual(context.isMovyPlayerChrome(el),false);
+context.window.location.hostname='movy.sx.evil.invalid';assert.strictEqual(context.isMovyPlayerChrome(el),false);
+const fn=source.slice(source.indexOf('function inspectOverlayElement'),source.indexOf('// End extraction inspectOverlayElement'));
+assert(fn.includes('if (isMovyPlayerChrome(el)) return;'));
+assert(fn.indexOf('if (isMovyPlayerChrome(el)) return;')<fn.indexOf('window.getComputedStyle(el)'),'Structural exclusion must precede transient visibility/child-count classification');
+console.log('PASS 8 structural Movy player chrome/host/insertion guards');

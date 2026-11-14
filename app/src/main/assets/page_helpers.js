@@ -1,0 +1,3091 @@
+/*
+ * Buccaneer page helpers (window.__fb). Runs in every frame at document start.
+ * The app calls these through evaluateJavascript() in the top frame:
+ *   video:   togglePlay() play() pause() seek(sec) volume(delta) toggleMute() state() prepareFullscreen()
+ *            -> "ok" | "frame" (player is in a frame we cannot script) | "none"
+ *            frameCenter() (where to tap a player we cannot script), diag() (Settings > Diagnostics)
+ *   typing:  field() focusIntoView() clear()
+ * Also reports real taps that land in text fields (opens the keypad) and enforces one video at a time.
+ */
+(function () {
+  'use strict';
+
+  if (window.__fbInstalled) return;
+  window.__fbInstalled = true;
+
+  // the poster-grid site: skip all instrumentation. The PowerVR GPU driver on this Fire TV crashes
+  // (SIGSEGV in KEGLReleaseRenderTarget) when our observers/hooks/listeners run alongside the
+  // site's intro animation. Only the passive __fb API (video controls, typing) is exposed here.
+  var __host = '';
+  try { __host = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
+  var __isFlixer = /(^|\.)flixer\.(gd|su)$/.test(__host);
+  var __isStreamCorner = /(^|\.)streamcorner\.[a-z0-9-]+$/.test(__host);
+
+  // ReedStreams' rotating players use an intentionally invalid hidden PDF as a
+  // sandbox probe. Android WebView has no PDF plug-in: OBJECT load failure is
+  // not evidence of iframe sandboxing. Ignore only this exact probe's error,
+  // before its inline handler paints the misleading sandbox banner. No timers,
+  // observers, native API changes, or interference with video/network errors.
+  (function installReedPdfProbeGuard() {
+    try {
+      if (window.top === window) return;
+      var ancestors = window.location.ancestorOrigins;
+      var reedPlayer = false;
+      for (var i = 0; ancestors && i < ancestors.length; i++) {
+        if (/^https:\/\/([a-z0-9-]+\.)*reedstreams\.(to|st|link)(?::\d+)?$/i.test(ancestors[i])) {
+          reedPlayer = true;
+          break;
+        }
+      }
+      if (!reedPlayer) return;
+      document.addEventListener('error', function reedPdfProbeError(event) {
+        var target = event.target;
+        if (!target || target.tagName !== 'OBJECT' || target.id !== 'sandDetect' ||
+            target.getAttribute('data') !== 'data:application/pdf;base64,aG1t') return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, true);
+    } catch (e) { /* unknown ancestry retains existing page behavior */ }
+  })();
+
+  // Prefer only measured low-bitrate mirrors. Current Reed NBA masters offer
+  // 240p at 1.395 Mbps peak; the next level peaks above this TV's link budget.
+  // Site DOM/script load events only: no timers, polling, native API wrappers,
+  // or changes to the StreamCorner/other-site instrumentation paths.
+  (function installReedBudgetSource() {
+    try {
+      var reedOrigin = /^https:\/\/([a-z0-9-]+\.)*reedstreams\.(to|st|link)(?::\d+)?$/i;
+      var reedHost = /(^|\.)reedstreams\.(to|st|link)$/.test(__host);
+      var matchPath = /^\/watch\/(new-york-knicks-vs-indiana-pacers|milwaukee-bucks-vs-orlando-magic)\/?$/;
+      if (window.top === window && reedHost && window.location.protocol === 'https:') {
+        var preferredPath = '';
+        function preferReedMirror() {
+          var path = window.location.pathname;
+          if (!matchPath.test(path) || preferredPath === path) return;
+          var buttons = document.querySelectorAll('button[class*="streamPillBtn"]');
+          for (var i = 0; i < buttons.length; i++) {
+            var label = buttons[i].querySelector('[class*="streamPillLabel"]');
+            if (!label) continue;
+            // Real UI labels are "Reed-1" (API sourceName is "Reed"); match
+            // exactly Reed or Reed-<digits>, nothing else.
+            var lbl = (label.getAttribute('title') || label.textContent || '').trim();
+            if (!/^Reed(?:-\d+)?$/.test(lbl)) continue;
+            // Once per SPA route, not on every mutation: respect manual overrides.
+            preferredPath = path;
+            if (buttons[i].className.indexOf('streamPillActive') < 0) buttons[i].click();
+            return;
+          }
+        }
+        new MutationObserver(preferReedMirror).observe(document, {childList: true, subtree: true});
+        preferReedMirror();
+        return;
+      }
+      if (window.top === window || __host !== 'sportsembed.store' ||
+          window.location.protocol !== 'https:' || !/^\/nba\/(knicks|bucks)\.html$/.test(window.location.pathname)) return;
+      var ancestors = window.location.ancestorOrigins;
+      var fromReed = false;
+      for (var j = 0; ancestors && j < ancestors.length; j++) {
+        if (reedOrigin.test(ancestors[j])) { fromReed = true; break; }
+      }
+      if (!fromReed) return;
+      var installed = false;
+      function installBudgetMiddleware() {
+        var vjs = window.videojs;
+        if (installed || !vjs || typeof vjs.use !== 'function') return;
+        // Video.js's supported source middleware runs before VHS loads media.
+        // Pin only measured families: knicks/bucks masters and the btsport
+        // family (site rotated the live source to btsport_* on 2026-11-13; the
+        // embed loads the 480p variant directly, defeating ABR). All pin to the
+        // measured 240p30 renditions (<=1.4 Mbps peak); everything else passes
+        // through untouched.
+        vjs.use('*', function () {
+          return {setSource: function (source, next) {
+            var m = /^https:\/\/sprucefiber\.s3\.eu-west-3\.amazonaws\.com\/(knicks|bucks|btsport)(_240p30|_[0-9]+p[0-9]+)?\.m3u8$/.exec(source.src || '');
+            if (!m || m[2] === '_240p30') { next(null, source); return; }
+            var low = {};
+            for (var key in source) if (Object.prototype.hasOwnProperty.call(source, key)) low[key] = source[key];
+            low.src = 'https://sprucefiber.s3.eu-west-3.amazonaws.com/' + m[1] + '_240p30.m3u8';
+            next(null, low);
+          }};
+        });
+        installed = true;
+        document.removeEventListener('load', installBudgetMiddleware, true);
+      }
+      document.addEventListener('load', installBudgetMiddleware, true);
+      installBudgetMiddleware();
+    } catch (e) { /* site/API drift retains the site's original source behavior */ }
+  })();
+
+  // NOTE: dark mode is the WebView's native force-dark (MainActivity.applyDarkMode()). Do NOT
+  // inject CSS filters here — filter:invert() on <html> crashes the PowerVR GPU process
+  // (SIGSEGV in libGLESv2_POWERVR_ROGUE.so) on the Fire TV.
+
+  var MIN_SIDE = 100;
+
+  // ------------------------------------------------------------------ finding the video
+
+  function fsElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement || null;
+  }
+
+  function isVisible(el) {
+    var r;
+    try { r = el.getBoundingClientRect(); } catch (e) { return false; }
+    if (!r || r.width < MIN_SIDE || r.height < MIN_SIDE) return false;
+    var win = (el.ownerDocument && el.ownerDocument.defaultView) || window;
+    if (r.bottom <= 0 || r.right <= 0 || r.top >= win.innerHeight || r.left >= win.innerWidth) return false;
+    try {
+      var cs = win.getComputedStyle(el);
+      if (cs.visibility === 'hidden' || cs.display === 'none') return false;
+    } catch (e) { /* ignore */ }
+    return true;
+  }
+
+  function collect(doc, depth, out) {
+    // doc may be a Document OR a DocumentFragment (shadow root). Fragments lack
+    // getElementsByTagName — querySelectorAll works on both.
+    var isDoc = !!doc.getElementsByTagName;
+    var q = function (sel) { return isDoc ? doc.getElementsByTagName(sel) : doc.querySelectorAll(sel); };
+    var vids = q('video');
+    for (var i = 0; i < vids.length; i++) out.push(vids[i]);
+    // Videos inside a custom element's shadow root (e.g. archive.org's <play-av>) are
+    // invisible to the light-DOM query above; walk open shadow roots. shadowRoot
+    // exists only on custom elements (attachShadow requires a hyphenated name),
+    // so skip the getter on everything else.
+    var els = q('*');
+    for (var s = 0; s < els.length; s++) {
+      var tn = els[s].tagName;
+      var sr = (tn && tn.indexOf('-') >= 0) ? els[s].shadowRoot : null;
+      if (sr) collect(sr, depth, out);
+    }
+    if (depth <= 0) return;
+    var frames = q('iframe');
+    for (var j = 0; j < frames.length; j++) {
+      try {
+        var d = frames[j].contentDocument;
+        if (d) collect(d, depth - 1, out);
+      } catch (e) { /* cross-origin frame */ }
+    }
+  }
+
+  // the video that is full screen, else the biggest visible one (a playing one counts 1.5x)
+  function findVideo() {
+    var fe = fsElement();
+    if (fe) {
+      if (fe.tagName === 'VIDEO') return fe;
+      var inner = fe.querySelector ? fe.querySelector('video') : null;
+      if (inner) return inner;
+    }
+    var all = [];
+    collect(document, 2, all);
+    var best = null;
+    var bestScore = 0;
+    for (var i = 0; i < all.length; i++) {
+      var v = all[i];
+      if (!isVisible(v)) continue;
+      var r = v.getBoundingClientRect();
+      var score = r.width * r.height * ((!v.paused && !v.ended) ? 1.5 : 1);
+      if (score > bestScore) {
+        best = v;
+        bestScore = score;
+      }
+    }
+    return best;
+  }
+
+  // a frame from another site: we cannot look inside, but the player may live in there
+  function isOpaque(f) {
+    try { return !f.contentDocument; } catch (e) { return true; }
+  }
+
+  function area(el) {
+    try {
+      var r = el.getBoundingClientRect();
+      return r.width * r.height;
+    } catch (e) { return 0; }
+  }
+
+  function bigFrame() {
+    var frames = document.getElementsByTagName('iframe');
+    var best = null;
+    var bestArea = 0;
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      if (!isVisible(f) || !isOpaque(f)) continue;
+      var a = area(f);
+      if (a > bestArea) {
+        bestArea = a;
+        best = f;
+      }
+    }
+    return best;
+  }
+
+  function countOpaqueFrames() {
+    var frames = document.getElementsByTagName('iframe');
+    var n = 0;
+    for (var i = 0; i < frames.length; i++) {
+      if (isVisible(frames[i]) && isOpaque(frames[i])) n++;
+    }
+    return n;
+  }
+
+  // What should the remote control? A video playing right here wins; otherwise a big frame from
+  // another site (a typical embedded player) beats a small video (an ad or a banner).
+  // Returns {video:el}, {frame: el} or null. Passive selected-player identity: no new listeners
+  // or timers on the poster-grid site.
+  var selectedTarget = null;
+  function attachedTarget(el) {
+    try {
+      var doc=el.ownerDocument||document,win=doc.defaultView||window;
+      if(!doc.documentElement.contains(el))return false;
+      for(var depth=0;win!==window && depth<3;depth++) {
+        var frame=win.frameElement;
+        if(!frame || !isVisible(frame) || !frame.ownerDocument.documentElement.contains(frame))return false;
+        win=frame.ownerDocument.defaultView;
+      }
+      return win===window;
+    }catch(e){return false;}
+  }
+  function videoInFrame(frame) {
+    try {
+      var doc=frame.contentDocument;if(!doc)return null;
+      var all=[],best=null,score=0;collect(doc,2,all);
+      for(var i=0;i<all.length;i++)if(isVisible(all[i])){
+        var r=all[i].getBoundingClientRect(),n=r.width*r.height*((!all[i].paused&&!all[i].ended)?1.5:1);
+        if(n>score){score=n;best=all[i];}
+      }
+      return best;
+    }catch(e){return null;}
+  }
+  function pickTarget() {
+    if (selectedTarget) {
+      var el = selectedTarget.video || selectedTarget.frame;
+      try { if (attachedTarget(el) && isVisible(el)) return selectedTarget; } catch (e) {}
+      selectedTarget = null;
+    }
+    var active = document.activeElement;
+    if (active && active.tagName === 'IFRAME' && isVisible(active)) {var inside=videoInFrame(active);return inside?{video:inside}:{frame:active};}
+    var v = findVideo();
+    if (v) return {video: v};
+    var f = bigFrame();
+    return f ? {frame: f} : null;
+  }
+
+  function selectAt(x, y) {
+    var el = document.elementFromPoint(x, y), node = el;
+    if (el && el.tagName === 'IFRAME') {var inside=videoInFrame(el);selectedTarget=inside?{video:inside}:{frame:el};return inside?'ok':'frame';}
+    for (var i=0;node && i<8;i++,node=node.parentElement) {
+      if (node === document.body || node === document.documentElement) break;
+      if (node.tagName === 'VIDEO') { selectedTarget = {video:node}; return 'ok'; }
+      var videos = node.querySelectorAll ? node.querySelectorAll('video') : [];
+      if (videos.length === 1 && isVisible(videos[0])) { selectedTarget = {video:videos[0]}; return 'ok'; }
+      if (videos.length > 1) break;
+    }
+    return 'none';
+  }
+
+  // ------------------------------------------------------------------ cross-frame video commands
+  //
+  // The app can only script the top frame, but this helper runs in every frame. When the
+  // player's video lives in a frame from another site, the top frame forwards the command to
+  // that frame's copy of this helper, which runs it on its own video and answers back. That
+  // is how Play/Pause and FF/Rewind reach players we cannot script directly — in full screen
+  // as well as normal.
+  var frameCmdSeq = 0;
+  var lastFrameState = null; // { at: ms, state: {...} } — newest state a player frame reported
+
+  function frameIsFlixer(frame) {
+    try { return /(^|\.)flixer\.(gd|su)$/.test(((frame.src || '').split('/')[2] || '').toLowerCase()); } catch (e) { return false; }
+  }
+
+  function forwardToFrame(frame, cmd, arg) {
+    try {
+      frameCmdSeq++;
+      frame.contentWindow.postMessage({ __fbCmd: 1, id: frameCmdSeq, cmd: cmd, arg: arg }, '*');
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // Run a video command on one <video>. Returns 'ok' | 'failed'.
+  function runOnVideo(v, cmd, arg) {
+    switch (cmd) {
+      case 'togglePlay':
+        if (v.paused || v.ended) safePlay(v); else { cancelPlayAttempt(); v.pause(); }
+        return 'ok';
+      case 'play':
+        safePlay(v);
+        return 'ok';
+      case 'pause':
+        cancelPlayAttempt();
+        var all = []; collect(document, 2, all);
+        for (var i = 0; i < all.length; i++) { try { all[i].pause(); } catch (e) { /* ignore */ } }
+        return all.length ? 'ok' : 'none';
+      case 'seek':
+        if (!isFinite(arg) || !isFinite(v.currentTime)) return 'failed';
+        var wanted = Math.max(0, v.currentTime + arg);
+        if (isFinite(v.duration)) wanted = Math.min(v.duration, wanted);
+        var ranges = v.seekable;
+        if (ranges && ranges.length) {
+          var inside = false, nearest = 0, distance = Infinity;
+          for (var j = 0; j < ranges.length; j++) {
+            var a = ranges.start(j), b = ranges.end(j);
+            if (wanted >= a && wanted <= b) { inside = true; break; }
+            var edge = wanted < a ? a : b, dm = Math.abs(edge - wanted);
+            if (dm < distance) { distance = dm; nearest = edge; }
+          }
+          if (!inside) wanted = nearest;
+        }
+        v.currentTime = wanted;
+        return Math.abs(v.currentTime - wanted) <= 1 ? 'ok' : 'failed';
+      case 'volume':
+        v.muted = false;
+        v.volume = Math.max(0, Math.min(1, Math.round((v.volume + arg) * 100) / 100));
+        return 'ok';
+      case 'toggleMute':
+        v.muted = !v.muted;
+        return 'ok';
+      case 'unmute':
+        var done = 0, vids = document.getElementsByTagName('video');
+        for (var k = 0; k < vids.length; k++) { try { if (vids[k].muted) { vids[k].muted = false; done++; } } catch (e) { /* ignore */ } }
+        return done > 0 ? 'ok' : 'none';
+      default:
+        return 'failed';
+    }
+  }
+
+  // Dispatch a synthetic mousemove on a video to trigger the player's own idle logic.
+  function pokeVideo(v) {
+    try {
+      var r = v.getBoundingClientRect();
+      var cx = Math.round(r.left + r.width / 2);
+      var cy = Math.round(r.top + r.height / 2);
+      var doc = v.ownerDocument;
+      var win = doc.defaultView || window;
+      v.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true, view: win,
+        clientX: cx, clientY: cy,
+        screenX: cx, screenY: cy,
+        button: 0, buttons: 0
+      }));
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // Run a command on this frame's own video (called by the message listener below).
+  function frameCmd(cmd, arg) {
+    var t = pickTarget();
+    if (!t) return 'none';
+    if (cmd === 'pokeIdle') {
+      // Vidbolt player: its idle logic uses a timeout that adds 'vb-hide' to #vb.
+      // Synthetic mousemove doesn't trigger it, so add the class directly.
+      var vb = document.getElementById('vb');
+      if (vb && vb.classList) { vb.classList.add('vb-hide'); return 'ok'; }
+      // Fallback: trigger the player's idle logic via synthetic mousemove.
+      if (t.video) return pokeVideo(t.video) ? 'ok' : 'failed';
+      if (t.frame) return forwardToFrame(t.frame, cmd, arg) ? 'frame' : 'none';
+      return 'none';
+    }
+    if (t.video) {
+      try { return runOnVideo(t.video, cmd, arg); } catch (e) { return 'failed'; }
+    }
+    if (t.frame) {
+      // The video sits in a nested frame: hand the command one level down.
+      return forwardToFrame(t.frame, cmd, arg) ? 'frame' : 'none';
+    }
+    return 'none';
+  }
+
+  window.addEventListener('message', function (e) {
+    var m = e.data;
+    if (!m) return;
+    if (m.__fbRes === 1) {
+      // A player frame answered one of our commands: keep its reported state fresh.
+      if (m.state && typeof m.state === 'object') lastFrameState = { at: Date.now(), state: m.state };
+      return;
+    }
+    if (m.__fbFs === 1 || m.__fbFsCmd === 1) {
+      if (__isFlixer) return; // the poster-grid site keeps the native fullscreen path.
+      if (m.__fbFs === 1) {
+        // A child frame entered/exited CSS fullscreen: fill/restore its iframe element.
+        var fr = null;
+        if (e.source) {
+          var frames = document.getElementsByTagName('iframe');
+          for (var i = 0; i < frames.length; i++) {
+            try { if (frames[i].contentWindow === e.source) { fr = frames[i]; break; } } catch (x) { /* ignore */ }
+          }
+        }
+        if (m.on === 1) {
+          if (!fr) return;
+          cssFs.frameChild = e.source;
+          cssFsEnter(fr);
+          if (window !== window.top) cssFsPostParent(true);
+        } else {
+          var child = cssFs.frameChild;
+          cssFs.frameChild = null;
+          if (cssFs.active) cssFsExit();
+          if (child) { try { child.postMessage({ __fbFs: 1, on: 0 }, '*'); } catch (x) { /* ignore */ } }
+          if (window !== window.top) cssFsPostParent(false);
+        }
+        return;
+      }
+      // __fbFsCmd: an ancestor made this frame's element CSS-fullscreen; enter/exit internally.
+      var t = pickTarget();
+      if (m.on === 1) {
+        if (t && t.video) cssFsEnter(cssFsTarget(t.video));
+      } else {
+        cssFsExit();
+      }
+      return;
+    }
+    if (m.__fbCmd !== 1) return;
+    // Accept commands only from an ancestor frame (the top frame), never from sibling pages.
+    var fromAncestor = false;
+    try {
+      var w = parent, depth = 0;
+      while (w && w !== window && depth < 6) {
+        if (e.source === w) { fromAncestor = true; break; }
+        w = w.parent; depth++;
+      }
+    } catch (x) { /* ignore */ }
+    if (!fromAncestor) return;
+    var reply = function (result) {
+      try {
+        var st = null;
+        try { st = JSON.parse(window.__fb.state()); } catch (x) { /* ignore */ }
+        parent.postMessage({ __fbRes: 1, id: m.id, result: result, state: st }, '*');
+      } catch (x) { /* ignore */ }
+    };
+    try { reply(frameCmd(m.cmd, m.arg)); } catch (err) { reply('failed'); }
+  });
+
+  // Run a video command on the current target. The video may be in this document (or a
+  // same-origin frame) — then we drive it directly — or in a frame from another site, whose
+  // own copy of this helper receives the command by message.
+  // Returns 'ok' | 'failed' | 'frame' (forwarded to a player frame) | 'none'.
+  function videoOp(cmd, arg) {
+    var t = pickTarget();
+    if (!t) return 'none';
+    if (t.video) {
+      try { return runOnVideo(t.video, cmd, arg); } catch (e) { return 'failed'; }
+    }
+    if (t.frame) {
+      // the poster-grid site keeps the app's trusted-tap path: its player must be started by a real touch.
+      if (!frameIsFlixer(t.frame) && forwardToFrame(t.frame, cmd, arg)) return 'frame';
+    }
+    return 'frame';
+  }
+
+  // When the browser refuses play() (no click on this page yet) we remember it, so the app can tap
+  // the player instead: a real tap is the user gesture the browser wants.
+  var playBlockedAt = 0, playBlockedVideo = null, playAttempt = 0;
+  function cancelPlayAttempt(){playAttempt++;playBlockedAt=0;playBlockedVideo=null;}
+  function safePlay(v) {
+    cancelPlayAttempt();var attempt=playAttempt;
+    function refused(){if(attempt===playAttempt && v.paused){playBlockedAt=new Date().getTime();playBlockedVideo=v;}}
+    try {
+      var p=v.play();
+      if(p && typeof p.catch==='function')p.catch(refused);
+    }catch(e){refused();}
+  }
+
+  // ------------------------------------------------------------------ full screen
+
+  // Page-level (CSS) fullscreen. Native WebView fullscreen (Chromium's FullScreenView) draws a
+  // center play/pause button that stays on screen while paused, so instead we make the player
+  // container position:fixed over the whole viewport — the site's own player UI stays in charge
+  // and the native FullScreenView (and its button) is never created.
+  //
+  // Players like Clappr check document.fullscreenElement and listen for fullscreenchange, so we
+  // fake both (fullscreenElement reports our element; we dispatch a synthetic fullscreenchange).
+  //
+  // the poster-grid site keeps the native path (it returns early below).
+
+  var cssFs = { active: false, el: null, saved: null, frameChild: null, resumeTimer: 0, wasPlaying: false, savedScroll: null, scrollGuard: null, offsetTimer: 0, offsetEl: null, offsetTicks: 0, entryClasses: null, naturalRect: null, hostEntryClasses: null, hostNaturalRect: null, hostPosSaved: null, hostZSaved: null, hostPosWasStatic: false };
+  var __nativeFsFns = {};
+
+  function cssFsSave(el) {
+    var props = ['position', 'left', 'top', 'right', 'bottom', 'width', 'height', 'margin', 'z-index', 'background', 'object-fit', 'transform'];
+    var s = {};
+    for (var i = 0; i < props.length; i++) s[props[i]] = { v: el.style.getPropertyValue(props[i]), p: el.style.getPropertyPriority(props[i]) };
+    return s;
+  }
+
+  function cssFsRestore(el, s) {
+    var keys = Object.keys(s);
+    for (var i = 0; i < keys.length; i++) el.style.setProperty(keys[i], s[keys[i]].v, s[keys[i]].p);
+  }
+
+  function cssFsNotifyApp(on) {
+    try { if (window.Buccaneer && window.Buccaneer.cssFullscreen) window.Buccaneer.cssFullscreen(on ? true : false); } catch (e) { /* ignore */ }
+  }
+
+  function cssFsPostParent(on) {
+    try { parent.postMessage({ __fbFs: 1, on: on ? 1 : 0 }, '*'); } catch (e) { /* ignore */ }
+  }
+
+  // The GPU video layer inside a cross-origin player iframe is positioned in the TOP
+  // frame's document coordinates, not viewport coordinates. If the top frame page is
+  // scrolled when CSS fullscreen is entered, the video renders shifted by the scroll
+  // amount (the position:fixed iframe stays put, but the video layer does not). So we
+  // pin the top frame to (0,0) while CSS fullscreen is active and restore the original
+  // scroll on exit. Only the top frame is affected; in a child frame this is a no-op.
+  function cssFsInstallScrollGuard() {
+    if (window !== window.top) return;
+    if (cssFs.scrollGuard) return;
+    cssFs.savedScroll = { x: window.scrollX || 0, y: window.scrollY || 0 };
+    cssFs.scrollGuard = function () {
+      if (cssFs.active && (window.scrollX !== 0 || window.scrollY !== 0)) window.scrollTo(0, 0);
+    };
+    window.addEventListener('scroll', cssFs.scrollGuard, true);
+    window.scrollTo(0, 0);
+  }
+
+  function cssFsRemoveScrollGuard() {
+    if (window !== window.top) return;
+    if (cssFs.scrollGuard) {
+      window.removeEventListener('scroll', cssFs.scrollGuard, true);
+      cssFs.scrollGuard = null;
+    }
+    if (cssFs.savedScroll) {
+      var s = cssFs.savedScroll;
+      cssFs.savedScroll = null;
+      try { window.scrollTo(s.x, s.y); } catch (e) { /* ignore */ }
+    }
+  }
+
+  // The element to make CSS-fullscreen: a bare <video> becomes its player container,
+  // so the site's own controls come along.
+  function cssFsTarget(el) {
+    if (el && el.tagName === 'VIDEO') {
+      var c = playerContainer(el);
+      if (c && c !== el) return c;
+    }
+    return el;
+  }
+
+  // Shadow-root offset fix: on this WebView a position:fixed element that lives INSIDE
+  // a shadow root (getRootNode() is a ShadowRoot, not the document) anchors to the shadow
+  // host's in-flow position instead of the viewport origin (computed style says
+  // left:0/top:0 but getBoundingClientRect() returns the host's offset). Compensate with
+  // a translate so the fullscreen element covers the viewport. Scoped to elements inside
+  // a shadow root (not top-doc elements) and non-iframe elements; a bounded timer
+  // re-measures a few times to cover player layout settling.
+  function cssFsFixOffset(el) {
+    if (!el || !cssFs.active) return false;
+    if (el.tagName === 'IFRAME') return false;
+    var rn = el.getRootNode ? el.getRootNode() : null;
+    if (!rn || rn === document) return false; // only inside a shadow root (not top doc)
+    var r; try { r = el.getBoundingClientRect(); } catch (e) { return false; }
+    var dx = -Math.round(r.x), dy = -Math.round(r.y);
+    if (dx === 0 && dy === 0) return false;
+    el.style.setProperty('transform', 'translate(' + dx + 'px,' + dy + 'px)', 'important');
+    return true;
+  }
+
+  function cssFsEnter(el) {
+    if (!el || cssFs.active) return Promise.resolve();
+    unpinPlayerFrame(); // restore original positioning so cssFsSave captures it
+    cssFs.saved = cssFsSave(el);
+    cssFs.entryClasses = (el.className && typeof el.className === 'string') ? el.className.split(/\s+/).filter(Boolean) : [];
+    cssFs.naturalRect = (function () { var r; try { r = el.getBoundingClientRect(); } catch (e) { return null; } return { w: r.width, h: r.height }; })();
+    // If the element is inside a shadow root, also capture the shadow host's entry state
+    // (its classes + natural size) so the exit re-check can guard per-target.
+    var __fsRn = el.getRootNode ? el.getRootNode() : null;
+    var __fsHost = (__fsRn && __fsRn.host && __fsRn.host !== el) ? __fsRn.host : null;
+    if (__fsHost) {
+      cssFs.hostEntryClasses = (__fsHost.className && typeof __fsHost.className === 'string') ? __fsHost.className.split(/\s+/).filter(Boolean) : [];
+      cssFs.hostNaturalRect = (function () { var r; try { r = __fsHost.getBoundingClientRect(); } catch (e) { return null; } return { w: r.width, h: r.height }; })();
+    } else {
+      cssFs.hostEntryClasses = null; cssFs.hostNaturalRect = null;
+    }
+    // Stacking-context fix: the shadow host's z-index sets the shadow subtree's paint level in
+    // the root stacking context; if the host is static/z:auto, a high-z-index top-doc element
+    // (e.g. a menu bar) paints over the fullscreen video. Lift the host to relative + z-index max,
+    // saving its inline position + z-index (value+priority) to restore exactly on exit. Only the
+    // innermost shadow host is lifted (getRootNode returns the innermost root; single-root verified).
+    if (__fsHost) {
+      try {
+        cssFs.hostPosSaved = { v: __fsHost.style.getPropertyValue('position'), p: __fsHost.style.getPropertyPriority('position') };
+        cssFs.hostZSaved = { v: __fsHost.style.getPropertyValue('z-index'), p: __fsHost.style.getPropertyPriority('z-index') };
+        var __hcs = getComputedStyle(__fsHost);
+        cssFs.hostPosWasStatic = (__hcs.position === 'static');
+        if (cssFs.hostPosWasStatic) __fsHost.style.setProperty('position', 'relative', 'important');
+        __fsHost.style.setProperty('z-index', '2147483647', 'important');
+      } catch (e) { /* ignore */ }
+    } else {
+      cssFs.hostPosSaved = null; cssFs.hostZSaved = null; cssFs.hostPosWasStatic = false;
+    }
+    var st = el.style;
+    st.setProperty('position', 'fixed', 'important');
+    st.setProperty('left', '0', 'important');
+    st.setProperty('top', '0', 'important');
+    st.setProperty('right', '0', 'important');
+    st.setProperty('bottom', '0', 'important');
+    st.setProperty('width', '100vw', 'important');
+    st.setProperty('height', '100vh', 'important');
+    st.setProperty('margin', '0', 'important');
+    st.setProperty('z-index', '2147483647', 'important');
+    st.setProperty('background', '#000', 'important');
+    if (el.tagName === 'VIDEO') st.setProperty('object-fit', 'contain', 'important');
+    cssFs.el = el;
+    cssFs.active = true;
+    cssFsInstallScrollGuard();
+    try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
+    if (window === window.top) cssFsNotifyApp(true); else cssFsPostParent(true);
+    installFsResumeGuard(el);
+    installStalePointerGuard(el);
+    if (cssFsFixOffset(el)) {
+      cssFs.offsetEl = el; cssFs.offsetTicks = 5;
+      cssFs.offsetTimer = setInterval(function () {
+        if (!cssFs.active) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; return; }
+        var oel = cssFs.offsetEl;
+        if (!oel) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; return; }
+        oel.style.removeProperty('transform');
+        void oel.offsetWidth;
+        var r; try { r = oel.getBoundingClientRect(); } catch (e) { return; }
+        var dx = -Math.round(r.x), dy = -Math.round(r.y);
+        if (dx !== 0 || dy !== 0) {
+          oel.style.setProperty('transform', 'translate(' + dx + 'px,' + dy + 'px)', 'important');
+        }
+        // If the offset cleared (dx===0 && dy===0), leave the transform removed — do NOT
+        // re-apply the previous compensating translate (it would shift the element off-center).
+        // The original transform (if any) is saved in cssFs.saved and restored at exit.
+        if (--cssFs.offsetTicks <= 0) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; }
+      }, 2000);
+    }
+    return Promise.resolve();
+  }
+
+  // Entering CSS fullscreen resizes the player container (or the iframe holding the player) to
+  // fill the viewport; on some players (in a cross-origin iframe) that resize
+  // pauses the video. If it was playing, watch ~2.5 s and resume it — the short window means a
+  // deliberate user pause is never fought. No-op in ancestor frames (no <video> reachable there).
+  function installFsResumeGuard(el) {
+    if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
+    function findVideo() {
+      var e = cssFs.el;
+      if (!e) return null;
+      if (e.tagName === 'VIDEO') return e;
+      return e.querySelector ? e.querySelector('video') : null;
+    }
+    var v = findVideo();
+    if (!v || v.paused || v.ended) { cssFs.wasPlaying = false; return; }
+    cssFs.wasPlaying = true;
+    var checks = 0;
+    cssFs.resumeTimer = setInterval(function () {
+      checks++;
+      if (!cssFs.active || checks > 10) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; return; }
+      var vv = findVideo();
+      if (vv && vv.paused && !vv.ended) {
+        safePlay(vv);
+        clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0;
+      }
+    }, 250);
+  }
+
+  function cssFsExit() {
+    if (!cssFs.active) return;
+    var el = cssFs.el;
+    cssFs.active = false;
+    cssFs.el = null;
+    if (cssFs.offsetTimer) { clearInterval(cssFs.offsetTimer); cssFs.offsetTimer = 0; }
+    cssFs.offsetEl = null; cssFs.offsetTicks = 0;
+    cssFsRemoveScrollGuard();
+    if (cssFs.resumeTimer) { clearInterval(cssFs.resumeTimer); cssFs.resumeTimer = 0; }
+    cssFs.wasPlaying = false;
+    try { removeStalePointerGuard(); } catch (e) { /* ignore */ }
+    try { if (el) cssFsRestore(el, cssFs.saved); } catch (e) { /* ignore */ }
+    cssFs.saved = null;
+    // Restore the shadow host's position + z-index (if it was lifted during enter).
+    if (el) {
+      try {
+        var __exRn = el.getRootNode ? el.getRootNode() : null;
+        var __exHost = (__exRn && __exRn.host && __exRn.host !== el) ? __exRn.host : null;
+        if (__exHost) {
+          if (cssFs.hostPosSaved) {
+            if (cssFs.hostPosSaved.v) {
+              __exHost.style.setProperty('position', cssFs.hostPosSaved.v, cssFs.hostPosSaved.p);
+            } else {
+              __exHost.style.removeProperty('position');
+            }
+          }
+          if (cssFs.hostZSaved) {
+            if (cssFs.hostZSaved.v) {
+              __exHost.style.setProperty('z-index', cssFs.hostZSaved.v, cssFs.hostZSaved.p);
+            } else {
+              __exHost.style.removeProperty('z-index');
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+    cssFs.hostPosSaved = null; cssFs.hostZSaved = null; cssFs.hostPosWasStatic = false;
+    pinPlayerFrame(); // re-pin the player iframe now that CSS fullscreen is gone
+    try { document.dispatchEvent(new Event('fullscreenchange')); } catch (e) { /* ignore */ }
+    if (window === window.top) cssFsNotifyApp(false); else cssFsPostParent(false);
+    // After a fullscreen cycle a stale "fullscreen" class can persist on the player (or its
+    // shadow host) and collapse the layout to zero height (black screen with audio). Re-check a
+    // few times and remove /fullscreen/i classes that were NOT present at entry (session-added),
+    // on both the element and its shadow host, with per-target entry-class and natural-size guards.
+    (function () {
+      var exitEl = el;
+      function checkCollapse() {
+        try {
+          if (!exitEl || !exitEl.isConnected) return;
+          var targets = [exitEl];
+          var rn = exitEl.getRootNode ? exitEl.getRootNode() : null;
+          if (rn && rn.host && rn.host !== exitEl) targets.push(rn.host);
+          for (var t = 0; t < targets.length; t++) {
+            var target = targets[t];
+            var isHost = (t === 1);
+            var entryClasses = isHost ? (cssFs.hostEntryClasses || []) : (cssFs.entryClasses || []);
+            var natRect = isHost ? cssFs.hostNaturalRect : cssFs.naturalRect;
+            var natH = (natRect && natRect.h) ? natRect.h : 0;
+            var r; try { r = target.getBoundingClientRect(); } catch (e) { continue; }
+            var collapsed = r.height < Math.max(10, 0.25 * natH) && r.width > 50;
+            if (collapsed && target.className && typeof target.className === 'string') {
+              var entrySet = {};
+              for (var i = 0; i < entryClasses.length; i++) entrySet[entryClasses[i]] = 1;
+              var classes = target.className.split(/\s+/);
+              for (var j = 0; j < classes.length; j++) {
+                if (classes[j] && /fullscreen/i.test(classes[j]) && !entrySet[classes[j]]) {
+                  target.classList.remove(classes[j]);
+                }
+              }
+              void target.offsetWidth;
+            }
+          }
+        } catch (e) { /* ignore */ }
+      }
+      setTimeout(checkCollapse, 250);
+      setTimeout(checkCollapse, 600);
+      setTimeout(checkCollapse, 1200);
+    })();
+  }
+
+  // ------------------------------------------------------------------ player frame pinning
+  //
+  // On the PowerVR GPU (Fire TV) the video layer inside a cross-origin player iframe is only
+  // composited when the iframe is position:fixed; otherwise it renders black even though playing.
+  // So we pin the player iframe to position:fixed and reposition it on scroll so it still appears
+  // to scroll normally. Disabled while CSS fullscreen is active (cssFsEnter owns the iframe then);
+  // top frame only.
+  var playerPin = { frame: null, docLeft: 0, docTop: 0, scrollHandler: null, timer: 0 };
+
+  function pinPlayerFrame() {
+    if (window !== window.top) return;
+    if (cssFs.active) return;
+    var f = bigFrame();
+    if (!f) return;
+    if (playerPin.frame === f && f.style.position === 'fixed') return;
+    if (playerPin.frame && playerPin.frame !== f) unpinPlayerFrame();
+    var r; try { r = f.getBoundingClientRect(); } catch (e) { return; }
+    if (r.width < 100 || r.height < 100) return;
+    playerPin.frame = f;
+    playerPin.docLeft = r.left + (window.scrollX || 0);
+    playerPin.docTop = r.top + (window.scrollY || 0);
+    var st = f.style;
+    st.setProperty('position', 'fixed', 'important');
+    st.setProperty('left', Math.round(r.left) + 'px', 'important');
+    st.setProperty('top', Math.round(r.top) + 'px', 'important');
+    st.setProperty('width', Math.round(r.width) + 'px', 'important');
+    st.setProperty('height', Math.round(r.height) + 'px', 'important');
+    if (!playerPin.scrollHandler) {
+      playerPin.scrollHandler = function () {
+        if (!playerPin.frame || cssFs.active) return;
+        playerPin.frame.style.setProperty('top', Math.round(playerPin.docTop - (window.scrollY || 0)) + 'px', 'important');
+        playerPin.frame.style.setProperty('left', Math.round(playerPin.docLeft - (window.scrollX || 0)) + 'px', 'important');
+      };
+      window.addEventListener('scroll', playerPin.scrollHandler, true);
+    }
+    playerPin.scrollHandler();
+  }
+
+  function unpinPlayerFrame() {
+    if (!playerPin.frame) return;
+    var f = playerPin.frame;
+    var st = f.style;
+    st.removeProperty('position');
+    st.removeProperty('left');
+    st.removeProperty('top');
+    st.removeProperty('width');
+    st.removeProperty('height');
+    if (playerPin.scrollHandler) {
+      window.removeEventListener('scroll', playerPin.scrollHandler, true);
+      playerPin.scrollHandler = null;
+    }
+    playerPin.frame = null;
+    playerPin.docLeft = 0;
+    playerPin.docTop = 0;
+  }
+
+  function installPlayerPin() {
+    if (window.__playerPinInstalled) return;
+    window.__playerPinInstalled = true;
+    playerPin.timer = setInterval(pinPlayerFrame, 1000);
+  }
+
+  // Dead-video auto-retry: if the player's video never loads (stays 0x0 / readyState=0 for ~8s —
+  // the HLS segment fetch failed, e.g. a flaky CDN), reload the page once to retry. The video
+  // element itself is 0x0, so a "player" is detected by its container being >= 200x150. Bounded
+  // by a localStorage cooldown so a hard-down CDN doesn't cause an infinite reload loop.
+  function installDeadVideoRetry() {
+    if (window.__deadVideoRetryInstalled) return;
+    window.__deadVideoRetryInstalled = true;
+    var deadSince = 0;   // video first "genuinely dead" (source attached, ns=0/3)
+    var ns2Since = 0;    // video first "ns=2 dead" (actively loading / CDN failover)
+    var timerVideo = null; // the video element the timers are keyed to
+    var LS_KEY = '__deadVideoRetry';
+    var COOLDOWN_MS = 60000; // don't re-reload the same URL within 60s
+    var DEAD_MS = 8000;      // genuinely-dead (ns=0/3 + source): reload after 8s
+    var NS2_MS = 120000;     // ns=2 dead persisting 120s = CDN failover failed; bounded retry
+
+    // A "player" video: 0x0/readyState=0 inside a >=200x150 container (not a trailer).
+    function isDeadShape(v) {
+      try {
+        if (v.videoWidth !== 0 || v.videoHeight !== 0) return false;
+        if (v.readyState !== 0) return false;
+        var el = v.parentElement || v;
+        for (var i = 0; i < 4 && el; i++) {
+          var r = el.getBoundingClientRect();
+          if (r.width >= 200 && r.height >= 150) return true;
+          el = el.parentElement;
+        }
+        return false;
+      } catch (e) { return false; }
+    }
+
+    function findDeadShapeVideo() {
+      var all = [];
+      collect(document, 2, all);
+      for (var i = 0; i < all.length; i++) {
+        var cand = all[i];
+        var rn = cand.getRootNode ? cand.getRootNode() : null;
+        // Auto-reload stays on the light-DOM candidate set: a placeholder shadow
+        // video matching the dead signature must not reload the page.
+        if (rn && rn.nodeType === 11 /* DOCUMENT_FRAGMENT */) continue;
+        if (isDeadShape(cand)) return cand;
+      }
+      return null;
+    }
+
+    function doReload(reason) {
+      var allowed = true;
+      var nativeUsed = false;
+      try {
+        if (window.Buccaneer && typeof window.Buccaneer.canRetryDeadVideo === 'function') {
+          allowed = window.Buccaneer.canRetryDeadVideo();
+          nativeUsed = true;
+        }
+      } catch (e) { nativeUsed = false; allowed = true; }
+      if (!nativeUsed) {
+        // Fallback: localStorage (best-effort; flaky in cross-origin iframes).
+        // Runs when the native method is MISSING OR THREW.
+        try {
+          var now = Date.now();
+          var url = location.href;
+          var raw = localStorage.getItem(LS_KEY);
+          var last = raw ? JSON.parse(raw) : null;
+          if (last && last.url === url && (now - last.ts) < COOLDOWN_MS) {
+            allowed = false;
+          } else {
+            localStorage.setItem(LS_KEY, JSON.stringify({ url: url, ts: now }));
+          }
+        } catch (e) { /* localStorage failed; fail open (allowed stays true) */ }
+      }
+      if (!allowed) return false; // cooldown active; don't reload
+      try { console.warn('[dead-video-retry] reloading: ' + reason); } catch (e) { /* ignore */ }
+      location.reload();
+      return true;
+    }
+
+    setInterval(function () {
+      var v = findDeadShapeVideo();
+      if (!v) { deadSince = 0; ns2Since = 0; timerVideo = null; return; }
+      // Key the timers to the video element: if the player swaps <video> elements
+      // (destroys one, creates a new one), the "how long has THIS video been dead"
+      // clock must restart, or a fresh element inherits a stale timer and reloads early.
+      if (v !== timerVideo) { timerVideo = v; deadSince = 0; ns2Since = 0; }
+      if (v.networkState === 2) {
+        // Actively loading = the player's own CDN failover is in progress. Don't reload during
+        // the first NS2_MS (an 8s reload was resetting the failover to CDN #1 every cycle on one
+        // portal). If the ns=2 dead state persists past NS2_MS (120s, well beyond the observed
+        // ~4-60s failover time), reload once as a self-heal.
+        if (!ns2Since) ns2Since = Date.now();
+        deadSince = 0;
+        if (Date.now() - ns2Since >= NS2_MS) {
+          if (doReload('ns=2 dead for ' + (Date.now() - ns2Since) + 'ms')) ns2Since = 0;
+        }
+      } else if (!v.currentSrc) {
+        // No source set = the player is still searching (Mode A). Don't reload.
+        deadSince = 0; ns2Since = 0;
+      } else {
+        // Source attached but network empty (ns=0/3) = genuinely dead source.
+        // Original behavior preserved: reload after DEAD_MS.
+        if (!deadSince) deadSince = Date.now();
+        ns2Since = 0;
+        if (Date.now() - deadSince >= DEAD_MS) {
+          if (doReload('video 0x0/readyState=0 for ' + (Date.now() - deadSince) + 'ms')) deadSince = 0;
+        }
+      }
+    }, 2000);
+  }
+
+  // Player controls auto-hide in full screen. The player's own CSS only hides them on pointer
+  // idle; a TV remote is not a pointer, so on some sites the controls (and the big centre
+  // play/pause button) stay up forever. While full screen we dispatch a synthetic mousemove on
+  // the video every 1.5 s — the pointer activity the player's own idle logic expects (no CSS or
+  // class changes). The pause button is a child of the control bar, so it hides with the bar.
+  // Gated behind the poster-grid site guard: its player must not get synthetic input.
+  function installControlsAutoHide() {
+    if (window.__fbAutoHideInstalled) return;
+    window.__fbAutoHideInstalled = true;
+    var active = false;
+    var timer = 0;
+    function poke() {
+      var v = null;
+      try {
+        var fe = fsElement();
+        if (fe) {
+          if (fe.tagName === 'VIDEO') v = fe;
+          else if (fe.tagName === 'IFRAME') {
+            // Cross-origin iframe: can't reach the video inside. Forward a pokeIdle
+            // command to the iframe's own copy of this helper, which dispatches the
+            // synthetic mousemove on the video in its own document.
+            forwardToFrame(fe, 'pokeIdle', null);
+            return;
+          } else v = fe.querySelector ? fe.querySelector('video') : null;
+        }
+        if (!v) {
+          var all = [];
+          collect(document, 2, all);
+          for (var i = 0; i < all.length; i++) {
+            var a = all[i];
+            if (!a.paused && !a.ended && isVisible(a)) { v = a; break; }
+          }
+        }
+      } catch (e) { v = null; }
+      if (!v) return;
+      pokeVideo(v);
+    }
+    function schedule() {
+      if (timer) return;
+      // A few pokes are enough to start the idle timer on players whose controls stay up forever
+      // without a pointer event. Poking continuously would keep resetting the idle timer on
+      // players that auto-hide on their own, so their controls never go away. Poke a bounded
+      // number of times, then stop and let the player's own idle logic take over.
+      var pokes = 0;
+      var maxPokes = 2;
+      timer = setInterval(function () {
+        if (!active) return;
+        pokes++;
+        if (pokes > maxPokes) {
+          clearInterval(timer);
+          timer = 0;
+          return;
+        }
+        poke();
+      }, 1500);
+    }
+    function onFsChange() {
+      var fe = fsElement();
+      active = !!fe;
+      if (active) {
+        schedule();
+        // Hide the controls right away; the player's idle timer then keeps them hidden.
+        setTimeout(poke, 600);
+      } else if (timer) {
+        clearInterval(timer);
+        timer = 0;
+      }
+    }
+    document.addEventListener('fullscreenchange', onFsChange, true);
+    document.addEventListener('webkitfullscreenchange', onFsChange, true);
+  }
+
+  // ------------------------------------------------------------------ stale pointer guard
+  //
+  // Chromium re-runs hit-testing at the last real pointer position whenever an element's
+  // pointer-events change. On a TV that position is often over the player's bottom control bar:
+  // when the bar hides (player-fade-out sets pointer-events:none), the stale hit-test lands on
+  // the video and the browser fires a TRUSTED mouseout/mouseleave on the bar, which the player
+  // treats as "re-show the controls" — the bar re-appears ~30 ms after every auto-hide and the
+  // controls flicker forever.
+  //
+  // While CSS fullscreen is active we swallow mouseout/mouseleave on the control bars within 500 ms
+  // of a fade-out class change with no real pointer activity in between (the artifact's signature);
+  // real pointer input updates lastRealAt and is never swallowed.
+  var staleGuard = { el: null, handler: null, realPtr: null, observer: null, lastFadeAt: 0, lastRealAt: 0 };
+
+  function staleGuardIsBar(t) {
+    if (!t || !t.classList) return false;
+    if (t.classList.contains('player-bottom') || t.classList.contains('player-topbar')) return true;
+    try { return !!(t.closest && (t.closest('.player-bottom') || t.closest('.player-topbar'))); } catch (e) { return false; }
+  }
+
+  function installStalePointerGuard(el) {
+    removeStalePointerGuard();
+    if (!el) return;
+    staleGuard.el = el;
+    staleGuard.lastFadeAt = 0;
+    staleGuard.lastRealAt = Date.now(); // anything before install counts as "real"
+    staleGuard.handler = function (e) {
+      if (e.type !== 'mouseout' && e.type !== 'mouseleave') return;
+      if (!staleGuardIsBar(e.target)) return;
+      var now = Date.now();
+      if (staleGuard.lastFadeAt && now - staleGuard.lastFadeAt < 500 && staleGuard.lastRealAt < staleGuard.lastFadeAt) {
+        try { diagnostic('stale_mouseleave_swallowed', { target: String(e.target && e.target.className || '').slice(0, 60), dt: now - staleGuard.lastFadeAt }); } catch (err) { /* ignore */ }
+        try { e.stopImmediatePropagation(); e.stopPropagation(); } catch (err) { /* ignore */ }
+      }
+    };
+    try {
+      el.addEventListener('mouseout', staleGuard.handler, true);
+      el.addEventListener('mouseleave', staleGuard.handler, true);
+    } catch (e) { /* ignore */ }
+    staleGuard.observer = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        var m = muts[i];
+        if (m.attributeName !== 'class') continue;
+        var cls = m.target && m.target.className;
+        if (cls && String(cls).indexOf('player-fade-out') !== -1) staleGuard.lastFadeAt = Date.now();
+      }
+    });
+    try { staleGuard.observer.observe(el, { subtree: true, attributes: true, attributeFilter: ['class'] }); } catch (e) { staleGuard.observer = null; }
+    staleGuard.realPtr = function (e) { if (e && e.isTrusted) staleGuard.lastRealAt = Date.now(); };
+    try {
+      document.addEventListener('pointerdown', staleGuard.realPtr, true);
+      document.addEventListener('pointermove', staleGuard.realPtr, true);
+      document.addEventListener('mousedown', staleGuard.realPtr, true);
+      document.addEventListener('touchstart', staleGuard.realPtr, true);
+      document.addEventListener('mousemove', staleGuard.realPtr, true);
+    } catch (e) { /* ignore */ }
+  }
+
+  function removeStalePointerGuard() {
+    if (staleGuard.observer) { try { staleGuard.observer.disconnect(); } catch (e) { /* ignore */ } staleGuard.observer = null; }
+    if (staleGuard.el && staleGuard.handler) {
+      try {
+        staleGuard.el.removeEventListener('mouseout', staleGuard.handler, true);
+        staleGuard.el.removeEventListener('mouseleave', staleGuard.handler, true);
+      } catch (e) { /* ignore */ }
+    }
+    if (staleGuard.realPtr) {
+      try {
+        document.removeEventListener('pointerdown', staleGuard.realPtr, true);
+        document.removeEventListener('pointermove', staleGuard.realPtr, true);
+        document.removeEventListener('mousedown', staleGuard.realPtr, true);
+        document.removeEventListener('touchstart', staleGuard.realPtr, true);
+        document.removeEventListener('mousemove', staleGuard.realPtr, true);
+      } catch (e) { /* ignore */ }
+    }
+    staleGuard.el = null;
+    staleGuard.handler = null;
+    staleGuard.realPtr = null;
+  }
+
+  function enterFullscreen(el) {
+    var fn = el.requestFullscreen || el.webkitRequestFullscreen || el.webkitRequestFullScreen ||
+      el.mozRequestFullScreen || el.msRequestFullscreen;
+    if (fn) {
+      try {
+        var p = fn.call(el);
+        if (p && typeof p.catch === 'function') p.catch(function () { /* refused */ });
+      } catch (e) { /* ignore */ }
+    } else if (el.tagName === 'VIDEO' && el.webkitEnterFullscreen) {
+      try { el.webkitEnterFullscreen(); } catch (e) { /* ignore */ }
+    }
+  }
+
+
+
+  // The player's root: the first ancestor of the video that holds the player's own control
+  // buttons. Making THAT element CSS-fullscreen keeps the site's controls visible and matches
+  // the container the player tracks for its fullscreen state, so the player recognizes the
+  // session. A pure size-based walk cannot stop when the video fills the viewport, so the
+  // button check is the primary signal; the size walk remains the fallback.
+  function playerContainer(v) {
+    var r = v.getBoundingClientRect();
+    var area = r.width * r.height;
+    var best = v;
+    var p = v.parentElement;
+    var hops = 0;
+    while (p && p !== document.body && p !== document.documentElement && hops < 6) {
+      var pr = p.getBoundingClientRect();
+      var parea = pr.width * pr.height;
+      if (parea <= area * 3 && p.querySelector && p.querySelector('button')) return p;
+      if (parea > area * 1.35) break;
+      best = p;
+      p = p.parentElement;
+      hops++;
+    }
+    return best;
+  }
+
+  // ------------------------------------------------------------------ text fields
+
+  var TEXT_TYPES = ['', 'text', 'search', 'email', 'url', 'tel', 'number', 'password'];
+
+  function editableOf(el) {
+    if (!el) return null;
+    if (el.tagName === 'TEXTAREA') return el;
+    if (el.tagName === 'INPUT') {
+      var t = (el.getAttribute('type') || '').toLowerCase();
+      return TEXT_TYPES.indexOf(t) >= 0 ? el : null;
+    }
+    if (el.isContentEditable) return el;
+    return null;
+  }
+
+  function activeEditable() {
+    var el = document.activeElement;
+    var guard = 0;
+    while (el && el.tagName === 'IFRAME' && guard < 3) {
+      try {
+        var d = el.contentDocument;
+        if (!d || !d.activeElement) break;
+        el = d.activeElement;
+      } catch (e) { break; }
+      guard++;
+    }
+    return editableOf(el);
+  }
+
+  // set value the way a user would, so React/Vue style frameworks notice it
+  function setNativeValue(el, value) {
+    var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+  }
+
+  // ------------------------------------------------------------------ public API
+
+  var fullscreenRequest=0;
+  window.__fb = {
+    cancelFullscreen: function () {
+      fullscreenRequest++;
+      var old=document.getElementById('__fb_fs_overlay');if(old&&old.parentNode)old.parentNode.removeChild(old);
+      return 'ok';
+    },
+    // Ask the page to leave page-level (CSS) fullscreen (the app's Back key).
+    exitCssFullscreen: function () {
+      if (!cssFs.active) return 'none';
+      var child = cssFs.frameChild;
+      cssFs.frameChild = null;
+      cssFsExit();
+      if (child) { try { child.postMessage({ __fbFs: 1, on: 0 }, '*'); } catch (e) { /* ignore */ } }
+      return 'ok';
+    },
+    // 1 while the page is in page-level (CSS) fullscreen.
+    cssFullscreenActive: function () { return cssFs.active ? 1 : 0; },
+    selectAt: function (fx,fy) { return selectAt(fx*window.innerWidth,fy*window.innerHeight); },
+    focusTarget: function () { var t=pickTarget(); if(!t)return 'none'; try{(t.frame||t.video).focus();return t.frame?'frame':'ok';}catch(e){return 'none';} },
+    setDiagnosticLogging: function (enabled) {
+      diagnosticEnabled = !!enabled;
+      if (!__isFlixer && diagnosticEnabled) {
+        if (typeof installNetworkProbe === 'function') installNetworkProbe();
+        if (typeof scheduleHealthSample === 'function') scheduleHealthSample();
+      }
+      if (!__isFlixer && !diagnosticEnabled) {
+        if (typeof healthTimer !== 'undefined' && healthTimer) { clearTimeout(healthTimer); healthTimer = 0; }
+        if (typeof __netFlushTimer !== 'undefined' && __netFlushTimer) {
+          clearInterval(__netFlushTimer);
+          __netFlushTimer = 0;
+        }
+        if (typeof __netAgg !== 'undefined') __netAgg = {};
+      }
+      return diagnosticEnabled ? 1 : 0;
+    },
+    togglePlay: function () {
+      return videoOp('togglePlay');
+    },
+
+    play: function () {
+      return videoOp('play');
+    },
+
+    // 1 if the browser refused a play() in the last second and a tap on the player is needed
+    playBlocked: function () {
+      var target=pickTarget();
+      return target && target.video===playBlockedVideo && target.video.paused && playBlockedAt>0 && (new Date().getTime()-playBlockedAt)<1500 ? 1 : 0;
+    },
+
+    // pauses every video we can reach (also used when the app goes to the background)
+    pause: function () {
+      cancelPlayAttempt();
+      var all = [];
+      collect(document, 2, all);
+      for (var i = 0; i < all.length; i++) {
+        try { all[i].pause(); } catch (e) { /* ignore */ }
+      }
+      var f = bigFrame();
+      if (f && !frameIsFlixer(f) && forwardToFrame(f, 'pause')) return 'ok';
+      return all.length ? 'ok' : (f ? 'frame' : 'none');
+    },
+
+    seek: function (delta) {
+      return videoOp('seek', delta);
+    },
+
+    volume: function (delta) {
+      return videoOp('volume', delta);
+    },
+
+    toggleMute: function () {
+      return videoOp('toggleMute');
+    },
+
+    // Force-unmute: the player's own UI may be broken (e.g. a cross-origin frame whose control
+    // script throws), so set muted=false directly on every video we can reach.
+    unmute: function () {
+      var done = 0;
+      var vids = [];
+      collect(document, 2, vids);
+      for (var i = 0; i < vids.length; i++) {
+        try {
+          if (vids[i].muted) { vids[i].muted = false; done++; }
+        } catch (e) { /* cross-origin or detached */ }
+      }
+      if (done > 0) return 'ok';
+      var t = pickTarget();
+      if (t && t.frame && !frameIsFlixer(t.frame) && forwardToFrame(t.frame, 'unmute')) return 'frame';
+      return 'none';
+    },
+
+    // Where the player's mute button is, as a fraction of the screen: the last button in the
+    // player's control bar (mute is the rightmost on most players). Used when the video element
+    // is in a frame we cannot script: the app taps this spot, as a finger would.
+    muteButton: function () {
+      var t = pickTarget();
+      var el = t ? (t.frame || t.video) : null;
+      if (!el) return JSON.stringify({ ok: 0 });
+      var btns = el.querySelectorAll ? el.querySelectorAll('button') : [];
+      var last = null;
+      for (var i = 0; i < btns.length; i++) {
+        if (isVisible(btns[i])) last = btns[i];
+      }
+      if (!last) return JSON.stringify({ ok: 0 });
+      var r = last.getBoundingClientRect();
+      var w = window.innerWidth || 1;
+      var h = window.innerHeight || 1;
+      if (r.width < 4 || r.height < 4) return JSON.stringify({ ok: 0 });
+      return JSON.stringify({ ok: 1, x: (r.left + r.width / 2) / w, y: (r.top + r.height / 2) / h });
+    },
+
+    // Diagnostic: dump the player's control bar structure so we can see what the buttons are.
+    playerControls: function () {
+      var t = pickTarget();
+      var el = t ? (t.frame || t.video) : null;
+      if (!el) return JSON.stringify({ ok: 0 });
+      var bar = null;
+      var all = el.querySelectorAll ? el.querySelectorAll('div, ul, nav') : [];
+      for (var i = 0; i < all.length; i++) {
+        var btns = all[i].querySelectorAll ? all[i].querySelectorAll('button, [role="button"]') : [];
+        if (btns.length >= 3) { bar = all[i]; break; }
+      }
+      if (!bar) return JSON.stringify({ ok: 0, note: 'no control bar with 3+ buttons' });
+      var btns = [...bar.querySelectorAll('button, [role="button"]')];
+      return JSON.stringify({
+        ok: 1,
+        barClass: bar.className.substring(0, 80),
+        buttons: btns.map(function (b) {
+          var r = b.getBoundingClientRect();
+          return {
+            cls: b.className.substring(0, 50),
+            aria: b.getAttribute('aria-label') || '',
+            title: b.getAttribute('title') || '',
+            text: (b.textContent || '').trim().substring(0, 20),
+            visible: r.width > 0 && r.height > 0,
+            x: Math.round(r.left + r.width / 2),
+            y: Math.round(r.top + r.height / 2)
+          };
+        })
+      });
+    },
+
+    // Diagnostic: the full element stack at a tap point, frontmost first (document.elementsFromPoint).
+    // The FIRST entry is what actually eats the tap; if it is not a button/control/video, something
+    // is covering the player UI. This names the exact ad layer so killOverlays() can target it.
+    tapStack: function (x, y) {
+      var out = [];
+      try {
+        var els = document.elementsFromPoint(x, y) || [];
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i];
+          var s;
+          try { s = window.getComputedStyle(el); } catch (e) { s = null; }
+          var r;
+          try { r = el.getBoundingClientRect(); } catch (e) { r = null; }
+          var coversVideo = 0;
+          try {
+            var vids = document.getElementsByTagName('video');
+            for (var v = 0; v < vids.length; v++) {
+              var vr = vids[v].getBoundingClientRect();
+              if (vr.width > 100 && vr.height > 100 &&
+                  r && r.width > 100 && r.height > 100 &&
+                  r.left < vr.right && r.right > vr.left &&
+                  r.top < vr.bottom && r.bottom > vr.top) { coversVideo = 1; break; }
+            }
+          } catch (e) { /* ignore */ }
+          out.push({
+            tag: el.tagName,
+            id: el.id || '',
+            cls: (el.className && typeof el.className === 'string') ? el.className.substring(0, 60) : '',
+            pos: s ? s.position : '',
+            z: s ? s.zIndex : '',
+            pe: s ? s.pointerEvents : '',
+            op: s ? s.opacity : '',
+            w: r ? Math.round(r.width) : 0,
+            h: r ? Math.round(r.height) : 0,
+            coversVideo: coversVideo,
+            isControl: !!(el.closest && el.closest('button, [role="button"], .player-controls, .control, video')) ? 1 : 0
+          });
+        }
+      } catch (e) { /* ignore */ }
+      return JSON.stringify({
+        ok: 1,
+        x: Math.round(x), y: Math.round(y),
+        topFrame: window.top === window ? 1 : 0,
+        url: (window.location.href || '').substring(0, 120),
+        count: out.length,
+        stack: out
+      });
+    },
+
+    // Ask every same-origin iframe for its own tap stack at the equivalent point, and return them
+    // all. Cross-origin iframes cannot be reached (the ad layer lives in one), so for those we
+    // report the iframe's rect so the app can confirm the tap fell inside it.
+    tapStackAll: function (x, y) {
+      var result = { ok: 1, x: Math.round(x), y: Math.round(y), frames: [] };
+      try {
+        var self = JSON.parse(this.tapStack(x, y));
+        result.self = self;
+      } catch (e) { /* ignore */ }
+      // Walk same-origin iframes and ask each for its stack at the mapped point.
+      var frames = document.getElementsByTagName('iframe');
+      for (var i = 0; i < frames.length; i++) {
+        var f = frames[i];
+        var r;
+        try { r = f.getBoundingClientRect(); } catch (e) { continue; }
+        if (r.width < 50 || r.height < 50) continue;
+        var inside = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+        var entry = {
+          src: (f.src || '').substring(0, 120),
+          rect: { l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+          tapInside: inside ? 1 : 0
+        };
+        try {
+          var cw = f.contentWindow;
+          var cd = f.contentDocument;
+          if (cw && cd) {
+            var fx = x - r.left, fy = y - r.top;
+            var fb = cw.__fb;
+            if (fb && typeof fb.tapStack === 'function') {
+              entry.stack = JSON.parse(fb.tapStack(fx, fy));
+            }
+          }
+        } catch (e) {
+          entry.crossOrigin = 1;   // cannot reach in: the ad layer is in here
+        }
+        result.frames.push(entry);
+      }
+      return JSON.stringify(result);
+    },
+
+    // Diagnostic: report the iframe's bounding rect (top frame) or video rect (iframe),
+    // so we can see where the player actually is on screen.
+    playerGeometry: function () {
+      var result = { ok: 1 };
+      if (window.top === window) {
+        var iframe = document.querySelector('iframe');
+        if (iframe) {
+          var r = iframe.getBoundingClientRect();
+          result.iframe = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+        }
+        result.winW = window.innerWidth;
+        result.winH = window.innerHeight;
+      } else {
+        var v = document.querySelector('video');
+        if (v) {
+          var r = v.getBoundingClientRect();
+          result.video = { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+        }
+        result.winW = window.innerWidth;
+        result.winH = window.innerHeight;
+      }
+      return JSON.stringify(result);
+    },
+
+    // Where to tap to press play on a player we cannot script: the middle of its visible part,
+    // as a fraction of the screen (so it does not depend on page zoom).
+    frameCenter: function () {
+      var t = pickTarget();
+      var el = t ? (t.frame || t.video) : null;
+      if (!el) return JSON.stringify({ ok: 0 });
+      var r = el.getBoundingClientRect();
+      var win=(el.ownerDocument && el.ownerDocument.defaultView)||window;
+      try {
+        for(var depth=0;win!==window && depth<3;depth++){
+          var frame=win.frameElement;if(!frame)return JSON.stringify({ok:0});
+          var fr=frame.getBoundingClientRect(),sx=fr.width/(frame.offsetWidth||fr.width),sy=fr.height/(frame.offsetHeight||fr.height);
+          if(!(sx>0 && sy>0))return JSON.stringify({ok:0});
+          var left=Math.max(0,r.left),right=Math.min(win.innerWidth,r.right),top=Math.max(0,r.top),bottom=Math.min(win.innerHeight,r.bottom);
+          if(right<=left||bottom<=top)return JSON.stringify({ok:0});
+          r={left:fr.left+((frame.clientLeft||0)+left)*sx,right:fr.left+((frame.clientLeft||0)+right)*sx,
+             top:fr.top+((frame.clientTop||0)+top)*sy,bottom:fr.top+((frame.clientTop||0)+bottom)*sy};
+          win=frame.ownerDocument.defaultView;
+        }
+        if(win!==window)return JSON.stringify({ok:0});
+      }catch(e){return JSON.stringify({ok:0});}
+      var w = window.innerWidth || 1;
+      var h = window.innerHeight || 1;
+      var left = Math.max(r.left, 0);
+      var right = Math.min(r.right, w);
+      var top = Math.max(r.top, 0);
+      var bottom = Math.min(r.bottom, h);
+      if (right <= left || bottom <= top) return JSON.stringify({ ok: 0 });
+      return JSON.stringify({ ok: 1, x: ((left + right) / 2) / w, y: ((top + bottom) / 2) / h });
+    },
+
+    // Report for Settings > Diagnostics: what each video on the page is really doing, and which
+    // codecs this WebView claims to support.
+    diag: function () {
+      var out = { videos: [], frames: countOpaqueFrames(), mse: null };
+      var all = [];
+      collect(document, 2, all);
+      for (var i = 0; i < all.length && out.videos.length < 4; i++) {
+        var v = all[i];
+        var r;
+        try { r = v.getBoundingClientRect(); } catch (e) { r = { width: 0, height: 0 }; }
+        var q = null;
+        try { q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null; } catch (e) { q = null; }
+        out.videos.push({
+          w: Math.round(r.width), h: Math.round(r.height),
+          vw: v.videoWidth || 0, vh: v.videoHeight || 0,
+          rs: v.readyState, ns: v.networkState,
+          p: v.paused ? 1 : 0, m: v.muted ? 1 : 0,
+          vol: typeof v.volume === 'number' ? Number(v.volume.toFixed(2)) : 0,
+          rate: typeof v.playbackRate === 'number' ? Number(v.playbackRate.toFixed(2)) : 1,
+          t: v.currentTime || 0, d: isFinite(v.duration) ? v.duration : 0,
+          ba: (function () {
+            try {
+              if (v.buffered && v.buffered.length > 0) {
+                return Math.max(0, Number((v.buffered.end(v.buffered.length - 1) - v.currentTime).toFixed(2)));
+              }
+            } catch (e) { /* ignore */ }
+            return -1;
+          }()),
+          src: v.currentSrc || v.src || '',
+          e: v.error ? v.error.code : 0,
+          fr: q ? q.totalVideoFrames : -1, dr: q ? q.droppedVideoFrames : -1,
+          vis: isVisible(v) ? 1 : 0
+        });
+      }
+      var MS = window.MediaSource || window.WebKitMediaSource;
+      if (MS && typeof MS.isTypeSupported === 'function') {
+        var sup = function (type) {
+          try { return MS.isTypeSupported(type) ? 1 : 0; } catch (e) { return 0; }
+        };
+        out.mse = {
+          h264: sup('video/mp4; codecs="avc1.640028"'),
+          hevc: sup('video/mp4; codecs="hvc1.1.6.L93.B0"'),
+          vp9: sup('video/webm; codecs="vp9"'),
+          av1: sup('video/mp4; codecs="av01.0.05M.08"')
+        };
+      }
+      return JSON.stringify(out);
+    },
+
+    state: function () {
+      var t = pickTarget();
+      if (!t || !t.video) {
+        // The player lives in another site's frame: report the state its helper last sent back.
+        if (t && t.frame && lastFrameState && Date.now() - lastFrameState.at < 10000) {
+          return JSON.stringify(lastFrameState.state);
+        }
+        return JSON.stringify({ f: 0, fr: (t && t.frame) ? 1 : 0 });
+      }
+      var v = t.video;
+      return JSON.stringify({
+        f: 1,
+        p: v.paused ? 1 : 0,
+        t: v.currentTime || 0,
+        d: isFinite(v.duration) ? v.duration : 0,
+        h: v.videoHeight || 0,
+        v: v.volume,
+        m: v.muted ? 1 : 0
+      });
+    },
+
+    // Puts a transparent layer over the page. The app then taps the screen centre; that real tap
+    // is the user gesture browsers require before they allow full screen.
+    prepareFullscreen: function () {
+      var request=++fullscreenRequest;
+      var target = null;
+      var t = pickTarget();
+      if (t && t.video) {
+        var v = t.video;
+        if (v.ownerDocument !== document) {
+          var win = v.ownerDocument.defaultView;
+          target = (win && win.frameElement) ? win.frameElement : null;
+        }
+        if (!target) target = playerContainer(v);
+      } else if (t && t.frame) {
+        target = t.frame;
+      }
+      if (!target) return 'none';
+
+      var old = document.getElementById('__fb_fs_overlay');
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+
+      var ov = document.createElement('div');
+      ov.id = '__fb_fs_overlay';
+      ov.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;' +
+        'z-index:2147483647;background:rgba(0,0,0,0.01);';
+      var done = false;
+      function remove() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+      function handler(e) {
+        if(request!==fullscreenRequest){remove();return;}
+        try { e.preventDefault(); e.stopPropagation(); } catch (x) { /* ignore */ }
+        if (!done) {
+          done = true;
+          if (target && frameIsFlixer(target)) {
+            // the poster-grid site keeps the native fullscreen path (trusted tap, PowerVR constraints).
+            var nfn = __nativeFsFns.requestFullscreen || __nativeFsFns.webkitRequestFullscreen || null;
+            if (nfn) {
+              try { var p = nfn.call(target); if (p && typeof p.catch === 'function') p.catch(function () { /* refused */ }); } catch (x) { /* ignore */ }
+            }
+          } else {
+            enterFullscreen(target);
+            if (target && target.tagName === 'IFRAME' && !frameIsFlixer(target)) {
+              // Tell the frame to go CSS-fullscreen internally, so its player (and its
+              // fullscreen state) matches the now-fullscreen iframe element.
+              try { target.contentWindow.postMessage({ __fbFsCmd: 1, on: 1 }, '*'); } catch (x) { /* ignore */ }
+            }
+          }
+          setTimeout(remove, 500);
+        }
+      }
+      ov.addEventListener('pointerup', handler, true);
+      ov.addEventListener('touchend', handler, true);
+      ov.addEventListener('mouseup', handler, true);
+      ov.addEventListener('click', handler, true);
+      (document.body || document.documentElement).appendChild(ov);
+      setTimeout(function () { if (!done) { done = true; remove(); } }, 4000);
+      return 'ok';
+    },
+
+    // what is in the focused text field (the keypad mirrors it)
+    field: function () {
+      var el = activeEditable();
+      if (!el) return JSON.stringify({ ok: 0 });
+      var isPw = el.tagName === 'INPUT' && (el.getAttribute('type') || '').toLowerCase() === 'password';
+      var val = (el.value !== undefined) ? el.value : (el.textContent || '');
+      return JSON.stringify({ ok: 1, v: String(val), pw: isPw ? 1 : 0 });
+    },
+
+    // keep the field in the top part of the screen: the keypad covers the bottom
+    focusIntoView: function () {
+      var el = activeEditable();
+      if (!el) return 'none';
+      try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) { /* ignore */ }
+      try {
+        if (el.ownerDocument === document) {
+          var r = el.getBoundingClientRect();
+          window.scrollBy(0, (r.top + r.height / 2) - window.innerHeight * 0.22);
+        }
+      } catch (e) { /* ignore */ }
+      return 'ok';
+    },
+
+    clear: function () {
+      var el = activeEditable();
+      if (!el) return 'none';
+      try {
+        if (el.value !== undefined) {
+          setNativeValue(el, '');
+        } else {
+          el.textContent = '';
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      } catch (e) { return 'none'; }
+      return 'ok';
+    },
+
+    // Set the preferred quality order. The app calls this once at startup.
+    // Preference: 480p first, then 720p, then others, 1080p as last resort.
+    setQualityPreference: function (order) {
+      try {
+        qualityPreference = Array.isArray(order) ? order.slice() : [480, 720, 1080];
+        return 'ok';
+      } catch (e) { return 'none'; }
+    }
+  };
+
+  // ------------------------------------------------------------------ quality preference
+  // Prefer lower resolutions: 480p > 720p > others > 1080p (last resort).
+  // Hooks into HLS.js and Shaka players when they become available.
+  // Gated behind the "Prefer low quality streams" setting (bridge: lowQualityEnabled).
+  var qualityPreference = [480, 720, 1080];
+
+  function lowQualityOn() {
+    try {
+      var b = window.Buccaneer;
+      if (b && typeof b.lowQualityEnabled === 'function') return b.lowQualityEnabled() === true;
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
+  function pickPreferredLevel(levels) {
+    if (!levels || !levels.length) return -1;
+    // Sort by preference: exact matches first (in order), then closest below, then closest above
+    var scored = [];
+    for (var i = 0; i < levels.length; i++) {
+      var h = levels[i] && levels[i].height || 0;
+      if (!h) continue;
+      var score = 10000; // default: high = bad
+      for (var p = 0; p < qualityPreference.length; p++) {
+        if (h === qualityPreference[p]) { score = p; break; }
+      }
+      if (score === 10000) {
+        var minDist = Infinity;
+        for (var q = 0; q < qualityPreference.length; q++) {
+          var d = Math.abs(h - qualityPreference[q]);
+          if (d < minDist) minDist = d;
+        }
+        score = 100 + minDist;
+      }
+      scored.push({ idx: i, h: h, score: score });
+    }
+    if (!scored.length) return -1;
+    scored.sort(function (a, b) { return a.score - b.score; });
+    return scored[0].idx;
+  }
+
+  function applyQualityHls(hls) {
+    if (!hls || typeof hls !== 'object' || !Array.isArray(hls.levels) || hls.__fbQualitySet) return;
+    if (!lowQualityOn()) return;
+    var idx = pickPreferredLevel(hls.levels);
+    if (idx < 0) return;
+    hls.__fbQualitySet = true;
+    try {
+      hls.currentLevel = idx;
+      diagnostic('quality_set', { player: 'hls', level: idx, height: hls.levels[idx].height, url: window.location.href || '' });
+    } catch (e) { /* ignore */ }
+  }
+
+  function applyQualityShaka(player) {
+    if (!player || typeof player.getVariantTracks !== 'function' || player.__fbQualitySet) return;
+    if (!lowQualityOn()) return;
+    var tracks;
+    try { tracks = player.getVariantTracks() || []; } catch (e) { return; }
+    var best = null, bestScore = Infinity;
+    for (var i = 0; i < tracks.length; i++) {
+      var h = tracks[i].height || 0;
+      if (!h) continue;
+      var score = 10000;
+      for (var p = 0; p < qualityPreference.length; p++) {
+        if (h === qualityPreference[p]) { score = p; break; }
+      }
+      if (score === 10000) {
+        var minDist = Infinity;
+        for (var q = 0; q < qualityPreference.length; q++) {
+          var d = Math.abs(h - qualityPreference[q]);
+          if (d < minDist) minDist = d;
+        }
+        score = 100 + minDist;
+      }
+      if (score < bestScore) { bestScore = score; best = tracks[i]; }
+    }
+    if (!best) return;
+    player.__fbQualitySet = true;
+    try {
+      player.selectVariantTrack(best, true);
+      diagnostic('quality_set', { player: 'shaka', height: best.height, url: window.location.href || '' });
+    } catch (e) { /* ignore */ }
+  }
+
+  // Scan for HLS.js / Shaka players on window and apply quality preference.
+  // Runs on a short interval until a player is found (players load async).
+  var qualityScanTimer = 0;
+  function scanForQualityPlayers() {
+    if (qualityScanTimer) return; // already scanning
+    var attempts = 0;
+    qualityScanTimer = setInterval(function () {
+      attempts++;
+      if (attempts > 30) { clearInterval(qualityScanTimer); qualityScanTimer = 0; return; } // stop after ~30s
+      var found = false;
+      try {
+        for (var key in window) {
+          var o;
+          try { o = window[key]; } catch (e) { continue; }
+          if (!o || typeof o !== 'object') continue;
+          if (o.levels && Array.isArray(o.levels) && typeof o.loadSource === 'function') {
+            applyQualityHls(o);
+            found = true;
+          }
+          // Shaka player
+          if (typeof o.getVariantTracks === 'function' && typeof o.load === 'function') {
+            applyQualityShaka(o);
+            found = true;
+          }
+        }
+      } catch (e) { /* ignore */ }
+      try {
+        if (window.shaka && window.shaka.player) {
+          var video = document.querySelector('video');
+          if (video) {
+            var shakaPlayer = video.shakaPlayer || video.__shakaPlayer;
+            if (shakaPlayer && typeof shakaPlayer.getVariantTracks === 'function') {
+              applyQualityShaka(shakaPlayer);
+              found = true;
+            }
+          }
+          var commonNames = ['player', 'shakaPlayer', 'videoPlayer', 'streamPlayer'];
+          for (var ci = 0; ci < commonNames.length; ci++) {
+            var p = window[commonNames[ci]];
+            if (p && typeof p.getVariantTracks === 'function') {
+              applyQualityShaka(p);
+              found = true;
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
+      if (found) { clearInterval(qualityScanTimer); qualityScanTimer = 0; }
+    }, 1000);
+  }
+
+  // (quality scan listener is registered after the poster-grid site guard below)
+
+  // ------------------------------------------------------------------ one video at a time
+  // Weak TV hardware has room for one video decoder; when a hidden preview, an ad and the real
+  // player all start together you get two sound tracks and a black picture. The app says (via the
+  // Buccaneer bridge, present in every frame) whether this is on and which frame started a real
+  // player last; every frame then stops its own media when another frame took over.
+  var documentId = bridgeCall('currentDocument') || '';
+  var frameId = documentId + ':' + String(Math.random()).slice(2) + '-' + String(new Date().getTime());
+
+  function bridgeCall(name, arg) {
+    try {
+      var b = window.Buccaneer;
+      if (b && typeof b[name] === 'function') return arg === undefined ? b[name]() : b[name](arg);
+    } catch (e) { /* ignore */ }
+    return undefined;
+  }
+
+  var diagnosticEnabled = false;
+  try {
+    diagnosticEnabled = !!(window.Buccaneer && typeof window.Buccaneer.isDiagnosticsEnabled === 'function' &&
+      window.Buccaneer.isDiagnosticsEnabled());
+  } catch (e) { diagnosticEnabled = false; }
+
+  // Prove the script is alive in this frame: report once when diagnostics turn on.
+  if (diagnosticEnabled) {
+    try {
+      var b = window.Buccaneer;
+      if (b && typeof b.diagnosticEvent === 'function') {
+        b.diagnosticEvent('frame_script_alive', JSON.stringify({
+          url: window.location.href || '',
+          topFrame: window.top === window ? 1 : 0,
+          hasVideo: document.getElementsByTagName('video').length > 0
+        }));
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // the poster-grid site: suppress the player's auto-fullscreen. The watch page calls
+  // requestFullscreen() on the player container when playback starts (native fullscreen); the
+  // video should stay inline until the user clicks the player or the menu button. So we block
+  // requestFullscreen() within a short window after page load / each play event (the auto calls)
+  // and allow later calls (user-initiated). Minimal by design: one capture-phase 'play' listener
+  // + one prototype modification; no timers/polling — to avoid the PowerVR GPU crash.
+  if (__isFlixer) {
+    (function installFlixerPlayerFixes() {
+      if (window.__fbFlixerPlayerFixes) return;
+      window.__fbFlixerPlayerFixes = true;
+
+      // Player fixes. Passive event listeners only — no timers/polling — to avoid the PowerVR
+      // GPU crash that heavier instrumentation triggers.
+      //  (1) No auto-fullscreen: the player auto-enters native fullscreen ~1s after play, which
+      //      "locks" it (D-pad remaps, pointer trapped). Block requestFullscreen() shortly after
+      //      a 'play' event, UNLESS the user just clicked a control-bar button (within 800ms).
+      //  (2) Menus open on hover ('onMouseEnter'), misfiring on a TV. (Fix reverted — below.)
+      //  (3) Auto-try next source on failure: if the video errors and is not playing, re-play
+      //      after 3s (max 3 retries); cancelled as soon as it plays.
+
+      var lastPlayTime = 0;
+      var lastCtrlClickTime = 0;
+      var retryCount = 0;
+      var retryTimer = null;
+
+      // The player's control-bar buttons all share these Tailwind classes.
+      function isCtrlBtn(el) {
+        return !!(el && el.tagName === 'BUTTON' && el.classList &&
+          el.classList.contains('w-12') && el.classList.contains('h-12') &&
+          el.classList.contains('rounded-full'));
+      }
+      function findCtrlBtn(el) {
+        while (el && el !== document) {
+          if (isCtrlBtn(el)) return el;
+          el = el.parentElement;
+        }
+        return null;
+      }
+
+      // (1) No auto-fullscreen.
+      document.addEventListener('play', function () { lastPlayTime = Date.now(); }, true);
+      document.addEventListener('click', function (e) {
+        if (findCtrlBtn(e.target)) lastCtrlClickTime = Date.now();
+      }, true);
+      var proto = window.Element.prototype;
+      var fsNames = ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
+      for (var i = 0; i < fsNames.length; i++) {
+        var n = fsNames[i];
+        if (typeof proto[n] !== 'function') continue;
+        var orig = proto[n];
+        proto[n] = function () {
+          var now = Date.now();
+          // User just clicked a control-bar button (e.g. the fullscreen button) -> allow.
+          if (now - lastCtrlClickTime < 800) return orig.apply(this, arguments);
+          // Within 3s of a 'play' event and no recent control-bar click -> auto-fullscreen, block.
+          if (now - lastPlayTime < 3000) return Promise.reject(new Error('auto fullscreen suppressed'));
+          return orig.apply(this, arguments);
+        };
+      }
+
+      // (2) Menus open on click, not hover: REVERTED — all hover-fix attempts broke video
+      // playback (the menu-detection logic accidentally triggered control-bar buttons). Menus
+      // open on hover again (the site's default); a safer fix may be attempted later.
+
+      // (3) Auto-try next source on failure (safety net).
+      function attachVideoRetry(v) {
+        if (v.__fbRetryAttached) return;
+        v.__fbRetryAttached = true;
+        v.addEventListener('error', function () {
+          if (!v.paused) return;            // still playing, nothing to retry
+          if (retryCount >= 3 || retryTimer) return;
+          retryTimer = setTimeout(function () {
+            retryTimer = null;
+            retryCount++;
+            try { v.play().catch(function () {}); } catch (err) { /* ignore */ }
+          }, 3000);
+        });
+        v.addEventListener('play', function () {
+          if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; retryCount = 0; }
+        });
+      }
+      // (4) Video centering: the GPU video layer for the top-frame <video> composites in the
+      //     top frame's DOCUMENT coordinates, not viewport coordinates. The SPA preserves the
+      //     grid's scroll position through the show->player transition, so when the video's
+      //     first frame composites the top frame is scrolled (e.g. 150px) and the video renders
+      //     clipped/offset by exactly that amount (bottom cut off, video sits high). Pin the top
+      //     frame to (0,0) for as long as a <video> is present: the player page's scroll is
+      //     otherwise useless (the video sits in a fixed inset-0 container covering the viewport).
+      //     On the grid/info pages there is no top-frame <video>, so scrolling stays free there.
+      //     Passive listeners only (no timers) to stay within the poster-grid site's GPU budget.
+      function pinIfVideo() {
+        if (window !== window.top) return;
+        if (!document.querySelector('video')) return;
+        if (window.scrollX !== 0 || window.scrollY !== 0) {
+          try { window.scrollTo(0, 0); } catch (e) { /* ignore */ }
+        }
+      }
+      window.addEventListener('scroll', pinIfVideo, true);
+      pinIfVideo();
+
+      var mo = new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          var added = muts[i].addedNodes;
+          for (var j = 0; j < added.length; j++) {
+            var node = added[j];
+            if (node.nodeType !== 1) continue;
+            if (node.tagName === 'VIDEO') { attachVideoRetry(node); pinIfVideo(); }
+            else if (node.querySelectorAll) {
+              var vs = node.querySelectorAll('video');
+              if (vs.length) pinIfVideo();
+              for (var k = 0; k < vs.length; k++) attachVideoRetry(vs[k]);
+            }
+          }
+        }
+      });
+      mo.observe(document.documentElement, { childList: true, subtree: true });
+    })();
+  }
+
+  // Auto-unmute on video start: when a video begins playing, make sure it is not muted — the
+  // user's requirement that video is not muted when it starts, on all sites.
+  //
+  // Minimal by design: one capture-phase 'play' listener (the same pattern the poster-grid
+  // fullscreen guard above uses); no timers or polling, so it adds none of the GPU/CPU load
+  // that triggers the PowerVR crash. It acts once per play event (muted=false is a no-op if
+  // already unmuted) and never mutes. Placed before the poster-grid early-return so it is
+  // installed on every site.
+  (function installAutoUnmute() {
+    if (window.__fbAutoUnmuteInstalled) return;
+    window.__fbAutoUnmuteInstalled = true;
+    document.addEventListener('play', function (e) {
+      var v = e && e.target;
+      if (!v || v.tagName !== 'VIDEO') return;
+      try { if (v.muted) v.muted = false; } catch (err) { /* ignore */ }
+    }, true);
+  })();
+
+  // the poster-grid site: stop here. The passive __fb API above is available for explicit
+  // Android-driven commands (video controls, typing). Everything below installs continuous
+  // capture-phase event listeners, media health timers, HLS constructor hooks, and synthetic
+  // click forwarding — all of which add the GPU/CPU load that triggers the PowerVR driver
+  // crash during the poster-grid site's intro animation.
+  if (__isFlixer) return;
+
+  // A player frame that asks "can I open a popup?" and reads the guard's null as "I am sandboxed": see installPopupProbeDecoy().
+  try { installPopupProbeDecoy(); } catch (e) { /* never let this stop the rest of the helpers */ }
+
+  // Dead-video auto-retry: reload once if the player's video never loads (flaky CDN).
+  installDeadVideoRetry();
+
+  // Pin the player iframe to position:fixed so the PowerVR GPU composites its video layer
+  // in normal mode (it only composites when the iframe is position:fixed).
+  installPlayerPin();
+
+  // Auto-hide the player's controls in full screen (the lazy-load poster site and similar):
+  // synthetic pointer activity on the video, driven by the player's own idle logic. Not
+  // installed on the poster-grid site.
+  //
+  // YouTube (and other show-on-activity players) do the OPPOSITE of hide-on-idle: any pointer
+  // activity re-shows the controls, which then hide after ~3 s. Our 1.5 s mousemove fires before
+  // that hide timer expires, so it perpetually re-wakes YouTube's controls — they never stay
+  // hidden. So we skip the synthetic poke on YouTube and let its own idle logic do the hiding.
+  var __isYouTube = /(^|\.)youtube\.com$|(^|\.)youtu\.be$/.test(__host);
+  if (!__isYouTube) installControlsAutoHide();
+
+  // Replace native fullscreen with the CSS fullscreen above, so Chromium's native
+  // FullScreenView (and its persistent center button) is never created. Runs at document
+  // start, before page scripts; never on the poster-grid site (which returned above).
+  (function installCssFullscreenIntercept() {
+    if (window.__fbFsIntercept) return;
+    window.__fbFsIntercept = true;
+    var proto = window.Element.prototype;
+    var names = ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen', 'mozRequestFullScreen', 'msRequestFullscreen'];
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i];
+      if (typeof proto[n] !== 'function') continue;
+      __nativeFsFns[n] = proto[n];
+      proto[n] = function () {
+        var el = cssFsTarget(this);
+        if (!el) return Promise.reject(new Error('no fullscreen target'));
+        return cssFsEnter(el);
+      };
+    }
+    // The legacy media API also triggers native fullscreen. Players on Android try
+    // video.webkitEnterFullscreen() BEFORE requestFullscreen(), and on this WebView the method
+    // lives on HTMLVideoElement.prototype (HTMLMediaElement.prototype has none), so both
+    // prototypes must be covered or the player's first-choice path goes native.
+    var mediaProtos = [window.HTMLVideoElement, window.HTMLMediaElement];
+    for (var mp = 0; mp < mediaProtos.length; mp++) {
+      var mpProto = mediaProtos[mp] && mediaProtos[mp].prototype;
+      if (!mpProto) continue;
+      if (typeof mpProto.webkitEnterFullscreen === 'function') {
+        __nativeFsFns.webkitEnterFullscreen = mpProto.webkitEnterFullscreen;
+        mpProto.webkitEnterFullscreen = function () {
+          return cssFsEnter(cssFsTarget(this));
+        };
+      }
+      if (typeof mpProto.webkitExitFullscreen === 'function') {
+        __nativeFsFns.webkitExitFullscreen = mpProto.webkitExitFullscreen;
+        mpProto.webkitExitFullscreen = function () {
+          if (cssFs.active) { cssFsExit(); return; }
+          try { __nativeFsFns.webkitExitFullscreen.call(this); } catch (e) { /* ignore */ }
+        };
+      }
+    }
+    // Fake the document's fullscreen state so player logic (Clappr and friends) sees a
+    // normal fullscreen session.
+    var docProto = Object.getPrototypeOf(document);
+    var nativeFsElement = Object.getOwnPropertyDescriptor(docProto, 'fullscreenElement');
+    var nativeFsEnabled = Object.getOwnPropertyDescriptor(docProto, 'fullscreenEnabled');
+    try {
+      Object.defineProperty(document, 'fullscreenElement', {
+        configurable: true,
+        get: function () {
+          if (cssFs.active) return cssFs.el;
+          try {
+            if (nativeFsElement && nativeFsElement.get) return nativeFsElement.get.call(this) || null;
+            return document.webkitFullscreenElement || null;
+          } catch (e) { return null; }
+        }
+      });
+      Object.defineProperty(document, 'fullscreenEnabled', {
+        configurable: true,
+        get: function () {
+          if (cssFs.active) return true;
+          try { if (nativeFsEnabled && nativeFsEnabled.get) return !!nativeFsEnabled.get.call(this); } catch (e) { /* ignore */ }
+          return true;
+        }
+      });
+      var origExit = docProto.exitFullscreen;
+      document.exitFullscreen = function () {
+        if (cssFs.active) { cssFsExit(); return Promise.resolve(); }
+        try { return origExit ? origExit.call(document) : Promise.resolve(); } catch (e) { return Promise.resolve(); }
+      };
+      var origWebkitExit = docProto.webkitExitFullscreen;
+      document.webkitExitFullscreen = function () {
+        if (cssFs.active) { cssFsExit(); return; }
+        try { if (origWebkitExit) origWebkitExit.call(document); } catch (e) { /* ignore */ }
+      };
+    } catch (e) { /* if the document state cannot be faked, players may misbehave, but fullscreen itself still works */ }
+  })();
+
+  // the cross-origin player site: remove the sandbox attribute from player iframes BEFORE they
+  // load — the player checks its security context and refuses to play if sandboxed, so it must
+  // be removed before the iframe navigates.
+  if (__isStreamCorner) installSandboxRemover();
+
+  // Every other site (the poster-grid site returned above): see installSandboxRelaxer().
+  if (!__isStreamCorner) {
+    try { installSandboxRelaxer(); } catch (e) { /* never let this stop the rest of the helpers */ }
+  }
+
+  // the cross-origin player site: remove the sandbox attribute from player iframes BEFORE they
+  // load — the player checks its security context and refuses to play if sandboxed, so it must
+  // be removed before the iframe navigates.
+  function installSandboxRemover() {
+    if (window.__fbSandboxRemoverInstalled) return;
+    window.__fbSandboxRemoverInstalled = true;
+    
+    var origCreateElement = document.createElement;
+    document.createElement = function(tagName) {
+      var el = origCreateElement.apply(this, arguments);
+      if (tagName && tagName.toLowerCase() === 'iframe') {
+        el.removeAttribute('sandbox');
+        // Ensure the iframe is allowed to go fullscreen (element API requires this
+        // permission for cross-origin frames; without it the player's fullscreen
+        // button is a no-op).
+        el.setAttribute('allowfullscreen', 'allowfullscreen');
+        var allow = el.getAttribute('allow') || '';
+        if (allow.indexOf('fullscreen') === -1) {
+          el.setAttribute('allow', (allow ? allow + ', ' : '') + 'fullscreen');
+        }
+        if (diagnosticEnabled) {
+          diagnostic('sandbox_removed_early', { url: window.location.href || '' });
+        }
+      }
+      return el;
+    };
+    
+    function removeSandboxFromIframes() {
+      var iframes = document.querySelectorAll('iframe[sandbox], iframe:not([allowfullscreen])');
+      for (var i = 0; i < iframes.length; i++) {
+        var f = iframes[i];
+        if (f.hasAttribute('sandbox')) {
+          f.removeAttribute('sandbox');
+        }
+        if (!f.hasAttribute('allowfullscreen')) {
+          f.setAttribute('allowfullscreen', 'allowfullscreen');
+        }
+        var allow = f.getAttribute('allow') || '';
+        if (allow.indexOf('fullscreen') === -1) {
+          f.setAttribute('allow', (allow ? allow + ', ' : '') + 'fullscreen');
+        }
+        if (diagnosticEnabled) {
+          diagnostic('sandbox_removed', { 
+            iframeSrc: (f.src || '').substring(0, 100),
+            url: window.location.href || ''
+          });
+        }
+      }
+    }
+    
+    removeSandboxFromIframes();
+    var sandboxTimer = setInterval(removeSandboxFromIframes, 500);
+    // Stop after 30 seconds (iframes should be loaded by then)
+    setTimeout(function() { clearInterval(sandboxTimer); }, 30000);
+    
+    // Hide the cross-origin player site error overlay (video plays behind it)
+    installStreamCornerErrorHider();
+  }
+  
+  // The cross-origin player site player shows a "Remove sandbox attributes" error overlay
+  // even when the video is playing. Hide the overlay so the user can see the video.
+  function installStreamCornerErrorHider() {
+    if (window.__fbScErrorHiderInstalled) return;
+    window.__fbScErrorHiderInstalled = true;
+    
+    function hideErrorOverlay() {
+      var errorEl = document.querySelector('[class*="error"], [class*="sandbox"], [id*="error"]');
+      if (errorEl && errorEl.textContent && /sandbox|remove.*attribute/i.test(errorEl.textContent)) {
+        errorEl.style.display = 'none';
+        if (diagnosticEnabled) {
+          diagnostic('sc_error_hidden', { text: errorEl.textContent.substring(0, 100) });
+        }
+      }
+      var overlays = document.querySelectorAll('div[style*="position: absolute"], div[style*="position:absolute"]');
+      for (var i = 0; i < overlays.length; i++) {
+        var o = overlays[i];
+        if (o.textContent && /sandbox|remove.*attribute/i.test(o.textContent)) {
+          o.style.display = 'none';
+          if (diagnosticEnabled) {
+            diagnostic('sc_overlay_hidden', { text: o.textContent.substring(0, 100) });
+          }
+        }
+      }
+    }
+    
+    hideErrorOverlay();
+    var errorTimer = setInterval(hideErrorOverlay, 1000);
+    setTimeout(function() { clearInterval(errorTimer); }, 60000);
+  }
+
+
+
+  // Any other site: a sandbox= on the page's own player iframe makes the embedded player (VidSrc and similar)
+  // refuse to play ("Sandbox Not Allowed - remove sandbox attributes"). That is the embedding site's attribute,
+  // not a bot check, and not something Buccaneer adds. The browser fixes a frame's sandbox flags when the frame
+  // starts to navigate, so a repair has to come before that, or be followed by one more load of that frame:
+  //  - a frame the page builds with script (setAttribute, .sandbox =, .src =) never gets the attribute: the hooks
+  //    below take it off before the frame's first navigation, so it loads clean the first time;
+  //  - a frame that arrived in the page's markup, innerHTML or a DOMTokenList call is already loading sandboxed:
+  //    the attribute goes, and once that first load has finished the frame is loaded once more (queueRepair /
+  //    drain). A same-URL navigation while the first one is still in flight is dropped by the browser, hence the
+  //    wait; location.replace() does the reload, so Back does not gain a history entry.
+  // Deliberately narrow, because a sandbox is also a safety feature of the page:
+  //  - top document only (frames inside a player keep whatever they were given);
+  //  - only a cross-site http(s) frame that looks like a video player: a URL that is a player on its own (the vidsrc
+  //    family, /embed/, .m3u8), or - once the frame has been measured and is player-sized - a URL with a player-ish
+  //    word in it, or a large frame that asks for fullscreen. srcdoc / data: / blob: / about:blank frames, frames
+  //    from the same site (the sandbox may be the page's boundary around its own content), captcha / payment /
+  //    social / ad frames (a Cloudflare Turnstile widget is sandboxed by Cloudflare itself) and small frames keep
+  //    their sandbox;
+  //  - at most 8 reloads per 30 s, so a page that keeps re-adding the attribute cannot start a reload loop.
+  // Cost: three iframe-only prototype hooks and one timer that looks at the page's own iframes (nothing to do when
+  // none carries a sandbox). Not installed on the poster-grid site (returns above) or StreamCorner (own handler).
+  function installSandboxRelaxer() {
+    if (window.__fbSandboxRelaxInstalled) return;
+    window.__fbSandboxRelaxInstalled = true;
+
+    var isTop = false;
+    try { isTop = window.top === window; } catch (e) { isTop = false; }
+    if (!isTop) {
+      // With diagnostics on, say when a frame is itself sandboxed, so a page that still shows the error can be
+      // told apart (a wrapper frame is sandboxed, which this does not repair) from one where nothing was.
+      if (diagnosticEnabled) {
+        try {
+          if (window.origin === 'null' && /^https?:/i.test(window.location.protocol)) {
+            diagnostic('frame_sandboxed', { url: String(window.location.href || '').substring(0, 160) });
+          }
+        } catch (e) { /* ignore */ }
+      }
+      return;
+    }
+
+    var ip = window.HTMLIFrameElement && window.HTMLIFrameElement.prototype;
+    if (!ip || typeof ip.setAttribute !== 'function' || typeof ip.removeAttribute !== 'function') return;
+    var origSet = ip.setAttribute;
+    var origRemove = ip.removeAttribute;
+    var pageHost = __host.replace(/^www\./, '');
+
+    // Host + path that is a video player on its own: vidsrc.*, /embed/, /e/<id>, /v/<id>, .m3u8 ...
+    var STRONG_URL = /vidsrc|vidlink|vidfast|vidplay|vidcloud|vidmoly|filemoon|dood|mixdrop|upstream|voe\.|\/embed\/|\/e\/|\/v\/|\.m3u8/i;
+    // Words that usually mean a player but also turn up in ad and widget URLs (video, play, watch ...): only counted
+    // for a frame that has been measured and is player-sized.
+    var PLAYER_URL = /embed|player|stream|video|movie|film|cine|flix|watch|vidsrc|vidlink|vidfast|vidplay|vidcloud|vidmoly|filemoon|dood|mixdrop|upstream|voe\.|\/e\/|\/v\/|\/play|\/tv\/|\/series|\/anime|\.m3u8|hls/i;
+    // Frames the page sandboxes for its own good, or that carry their own sandbox: left exactly as they are.
+    var SKIP_HOST = /(^|\.)(cloudflare\.com|hcaptcha\.com|recaptcha\.net|google\.com|gstatic\.com|googleapis\.com|doubleclick\.net|googlesyndication\.com|googleadservices\.com|googletagmanager\.com|stripe\.com|stripe\.network|paypal\.com|paypalobjects\.com|facebook\.com|facebook\.net|instagram\.com|twitter\.com|x\.com|tiktok\.com|linkedin\.com|reddit\.com|disqus\.com|disquscdn\.com|spotify\.com|soundcloud\.com|youtube\.com|youtube-nocookie\.com|youtu\.be|vimeo\.com|dailymotion\.com|twitch\.tv|typeform\.com|calendly\.com|zendesk\.com|intercom\.io|tawk\.to|crisp\.chat|livechatinc\.com|hotjar\.com|adnxs\.com|adsrvr\.org|criteo\.com|taboola\.com|outbrain\.com)$/;
+    var reloadStamps = [];
+    var pending = [];
+    var pendingTimer = 0;
+    var resolver = null;
+
+    function absolute(v) {
+      try {
+        resolver = resolver || document.createElement('a');
+        resolver.href = String(v);
+        return resolver.href;
+      } catch (e) { return String(v); }
+    }
+
+    function hostOf(u) {
+      var m = /^[a-z][a-z0-9+.\-]*:\/\/([^\/?#]*)/i.exec(String(u || ''));
+      if (!m) return '';
+      return m[1].replace(/^[^@]*@/, '').replace(/:\d*$/, '').toLowerCase().replace(/\.$/, '');
+    }
+
+    // Same site, or cannot tell: the sandbox may be this page's boundary around its own content.
+    function sameSite(h) {
+      var a = h.replace(/^www\./, ''), b = pageHost;
+      if (!a || !b) return true;
+      if (a === b || a.slice(-(b.length + 1)) === '.' + b || b.slice(-(a.length + 1)) === '.' + a) return true;
+      var pa = a.split('.'), pb = b.split('.');
+      return pa.length > 1 && pb.length > 1 && pa.slice(-2).join('.') === pb.slice(-2).join('.');
+    }
+
+    function fullscreenHint(f) {
+      if (f.hasAttribute('allowfullscreen') || f.hasAttribute('webkitallowfullscreen') ||
+          f.hasAttribute('mozallowfullscreen')) return true;
+      return /fullscreen/i.test(f.getAttribute('allow') || '');
+    }
+
+    // Numeric width/height attributes too small for a player: a beacon, or an ad slot (300x250, 728x90, 970x250,
+    // 160x600). The hooks cannot measure a frame that is not laid out yet, so when the page has already given the
+    // size, this is what they go by. A percentage or a missing attribute says nothing (the timer measures those).
+    function smallAttr(f) {
+      function num(v) {
+        if (v === null || v === '' || /%\s*$/.test(v)) return NaN;
+        return parseFloat(v);
+      }
+      var w = num(f.getAttribute('width')), h = num(f.getAttribute('height'));
+      if (w < 320 || h < 180) return true;
+      return w === w && h === h && h < 0.4 * w;
+    }
+
+    // u is the frame's absolute URL (the one it has, or is about to get).
+    // 'drop'  - looks like a video player: take the sandbox off.
+    // 'wait'  - nothing to go on yet (no src, or nothing player-like about it): leave it, look again later.
+    // other   - a frame that is deliberately left sandboxed: the reason.
+    // late is true only from scan(), which may measure the frame (layout); the hooks never do.
+    function judge(f, u, late) {
+      if (f.hasAttribute('srcdoc')) return 'srcdoc';
+      if (!u) return 'wait';
+      if (!/^https?:/i.test(u)) return 'scheme';
+      var h = hostOf(u);
+      if (sameSite(h)) return 'same-site';
+      if (SKIP_HOST.test(h)) return 'widget';
+      if (smallAttr(f)) return 'small';
+      var path = u.replace(/^https?:\/\//i, '').split(/[?#]/)[0];
+      var r = null, shown = false;
+      if (late) {
+        try { r = f.getBoundingClientRect(); } catch (e) { r = null; }
+        // 0 x 0 is a frame that is not shown yet, not a small one. Ad slots (728x90, 970x250, 300x250, 160x600)
+        // and widgets are smaller than 320x180 or wider than they are tall by more than 2.5 to 1.
+        shown = !!r && r.width > 0 && r.height > 0;
+        if (shown && (r.width < 320 || r.height < 180 || r.height < 0.4 * r.width)) return 'small';
+      }
+      if (STRONG_URL.test(path)) return 'drop';
+      // A player-ish word is enough only for a frame that has been measured; a large frame that asks for
+      // fullscreen is a player whatever its URL says.
+      if (shown && PLAYER_URL.test(path)) return 'drop';
+      if (shown && r.width >= 400 && r.height >= 240 && fullscreenHint(f)) return 'drop';
+      return 'wait';
+    }
+
+    function state(f) {
+      var st = f.__fbSb;
+      if (!st) {
+        st = f.__fbSb = { logged: false, reloaded: false, waits: 0, skips: 0, sawLoad: false, repairUrl: '', repairSince: 0 };
+        try { f.addEventListener('load', function () { st.sawLoad = true; }); } catch (e) { /* the age limit decides */ }
+      }
+      return st;
+    }
+
+    function note(f, event, via, tokens, u, extra) {
+      var st = state(f);
+      if (st.logged) return;
+      st.logged = true;
+      if (!diagnosticEnabled) return;
+      diagnostic(event, {
+        via: via,
+        host: hostOf(u),
+        page: pageHost,
+        // not named "tokens": the app's diagnostic log redacts any field with "token" in its name
+        flags: String(tokens === null || tokens === undefined ? '' : tokens).substring(0, 80),
+        extra: extra || ''
+      });
+    }
+
+    function connected(f) {
+      try { return f.isConnected === true || (document.documentElement && document.documentElement.contains(f)); }
+      catch (e) { return false; }
+    }
+
+    function reloadAllowed() {
+      var now = new Date().getTime(), keep = [];
+      for (var i = 0; i < reloadStamps.length; i++) {
+        if (now - reloadStamps[i] < 30000) keep.push(reloadStamps[i]);
+      }
+      reloadStamps = keep;
+      if (reloadStamps.length >= 8) return false;
+      reloadStamps.push(now);
+      return true;
+    }
+
+    // Has the frame's first document finished loading? (its own load event, or the parent's resource timing entry)
+    function loadedNow(st, u) {
+      if (st.sawLoad) return true;
+      try {
+        var es = performance.getEntriesByType('resource');
+        for (var i = es.length - 1; i >= 0 && i >= es.length - 300; i--) {
+          if (es[i].initiatorType === 'iframe' && es[i].name === u) return true;
+        }
+      } catch (e) { /* no resource timing: the age limit decides */ }
+      return false;
+    }
+
+    // The attribute is already off these frames; their current document still loaded with it. Load each once more
+    // when its first load is over. A frame that moved on (a new src loads clean), left the page or was repaired
+    // already is dropped; one whose first load never reports back is tried anyway after 8 s.
+    function drain() {
+      pendingTimer = 0;
+      var now = new Date().getTime(), keep = [];
+      for (var i = 0; i < pending.length; i++) {
+        var f = pending[i], st = f.__fbSb, u = st.repairUrl, cur = '';
+        try { cur = f.src || ''; } catch (e) { cur = ''; }
+        if (st.reloaded || cur !== u || !connected(f)) continue;
+        if (loadedNow(st, u) || now - st.repairSince > 8000) {
+          try {
+            if (f.contentWindow && reloadAllowed()) {
+              f.contentWindow.location.replace(u);
+              st.reloaded = true;
+              if (diagnosticEnabled) diagnostic('sandbox_reloaded', { host: hostOf(u), page: pageHost, waitedMs: now - st.repairSince });
+            }
+          } catch (e) { /* leave the frame as it is; a manual reload still works */ }
+          continue;
+        }
+        keep.push(f);
+      }
+      pending = keep;
+      if (pending.length) pendingTimer = setTimeout(drain, 250);
+    }
+
+    function queueRepair(f, u) {
+      var st = state(f);
+      if (st.reloaded || st.repairUrl) return false;
+      st.repairUrl = u;
+      st.repairSince = new Date().getTime();
+      pending.push(f);
+      if (!pendingTimer) pendingTimer = setTimeout(drain, 0);
+      return true;
+    }
+
+    // Take the attribute off a frame that is (or may be) already loading with it, and queue its one more load.
+    function strip(f, via, u) {
+      var tokens = null;
+      try { tokens = f.getAttribute('sandbox'); } catch (e) { /* ignore */ }
+      try { origRemove.call(f, 'sandbox'); } catch (e) { return; }
+      var queued = false;
+      if (connected(f) && /^https?:/i.test(u)) queued = queueRepair(f, u);
+      note(f, 'sandbox_relaxed', via, tokens, u, queued ? 'reload queued' : '');
+    }
+
+    // About to give a frame a sandbox, or a player URL when it already has one: decided before its first
+    // navigation, so no reload is needed.
+    function beforeSandbox(f, tokens) {
+      var u = '';
+      try { u = f.src || ''; } catch (e) { u = ''; }
+      if (judge(f, u, false) !== 'drop') return false;
+      note(f, 'sandbox_relaxed', 'hook', tokens, u, '');
+      return true;
+    }
+    function beforeSrc(f, value) {
+      if (!f.hasAttribute('sandbox')) return;
+      var u = absolute(value);
+      if (judge(f, u, false) !== 'drop') return;
+      var tokens = f.getAttribute('sandbox');
+      origRemove.call(f, 'sandbox');
+      note(f, 'sandbox_relaxed', 'hook', tokens, u, '');
+    }
+
+    // Hook 1: setAttribute on iframes only (React, jQuery, plain script).
+    try {
+      Object.defineProperty(ip, 'setAttribute', {
+        value: function setAttribute(name, value) {
+          try {
+            if (this && this.tagName === 'IFRAME') {
+              var key = String(name).toLowerCase();
+              if (key === 'sandbox') { if (beforeSandbox(this, value)) return; }
+              else if (key === 'src') beforeSrc(this, value);
+            }
+          } catch (e) { /* carry on as the page asked */ }
+          return origSet.apply(this, arguments);
+        },
+        writable: true, configurable: true, enumerable: false
+      });
+    } catch (e) { /* the timer below still repairs frames */ }
+
+    // Hooks 2 and 3: iframe.sandbox = '...' and iframe.src = '...' (Vue and plain script). The getters, and
+    // sandbox.add() and friends, are untouched; those are caught by the timer.
+    try {
+      var sbDesc = Object.getOwnPropertyDescriptor(ip, 'sandbox');
+      if (sbDesc && typeof sbDesc.get === 'function' && typeof sbDesc.set === 'function') {
+        Object.defineProperty(ip, 'sandbox', {
+          get: sbDesc.get,
+          set: function (v) {
+            try { if (this && this.tagName === 'IFRAME' && beforeSandbox(this, v)) return; } catch (e) { /* set it as the page asked */ }
+            return sbDesc.set.call(this, v);
+          },
+          enumerable: sbDesc.enumerable, configurable: true
+        });
+      }
+    } catch (e) { /* the timer below still repairs frames */ }
+    try {
+      var srcDesc = Object.getOwnPropertyDescriptor(ip, 'src');
+      if (srcDesc && typeof srcDesc.get === 'function' && typeof srcDesc.set === 'function') {
+        Object.defineProperty(ip, 'src', {
+          get: srcDesc.get,
+          set: function (v) {
+            try { if (this && this.tagName === 'IFRAME') beforeSrc(this, v); } catch (e) { /* carry on as the page asked */ }
+            return srcDesc.set.call(this, v);
+          },
+          enumerable: srcDesc.enumerable, configurable: true
+        });
+      }
+    } catch (e) { /* the timer below still repairs frames */ }
+
+    // The timer: the page's own iframes that still carry a sandbox attribute. One live-collection lookup when
+    // there are none; a frame is measured only when nothing else about it said "player", and not forever.
+    function scan() {
+      var list;
+      try { list = document.getElementsByTagName('iframe'); } catch (e) { return; }
+      for (var i = 0; i < list.length && i < 64; i++) {
+        var f = list[i];
+        try {
+          if (!f.hasAttribute('sandbox')) continue;
+          var st = state(f);
+          // After about a minute of looking, a frame that has not turned into a player is looked at rarely.
+          if (st.waits > 60) {
+            st.skips++;
+            if (st.skips % 10 !== 0) continue;
+          }
+          var u = '';
+          try { u = f.src || ''; } catch (e) { u = ''; }
+          var verdict = judge(f, u, true);
+          if (verdict === 'drop') {
+            strip(f, 'scan', u);
+          } else if (verdict === 'wait') {
+            st.waits++;
+            if (st.waits === 12) {
+              var rect = f.getBoundingClientRect();
+              note(f, 'sandbox_unmatched', 'scan', f.getAttribute('sandbox'), u,
+                Math.round(rect.width) + 'x' + Math.round(rect.height) + (fullscreenHint(f) ? ' fs' : ''));
+            }
+          } else {
+            note(f, 'sandbox_kept', verdict, f.getAttribute('sandbox'), u, '');
+          }
+        } catch (e) { /* skip this frame */ }
+      }
+    }
+
+    var ticks = 0;
+    function tick() {
+      try { scan(); } catch (e) { /* ignore */ }
+      ticks++;
+      setTimeout(tick, ticks < 20 ? 250 : (ticks < 140 ? 1000 : 3000));
+    }
+    try { document.addEventListener('DOMContentLoaded', function () { try { scan(); } catch (e) { /* ignore */ } }); } catch (e) { /* ignore */ }
+    setTimeout(tick, 0);
+  }
+
+  // Start quality preference scanning when a video element appears (player is loading).
+  // Registered after the poster-grid site guard: the interval scan adds CPU load that triggers
+  // the PowerVR driver crash during the poster-grid site's intro animation.
+  document.addEventListener('loadedmetadata', function () {
+    if (!qualityScanTimer) scanForQualityPlayers();
+    if (diagnosticEnabled) {
+    diagnostic('player_scan', {
+      url: window.location.href || '',
+      topFrame: window.top === window ? 1 : 0,
+      hls: typeof window.Hls === 'function' ? 1 : 0,
+      shaka: typeof window.shaka !== 'undefined' ? 1 : 0,
+      videoCount: document.getElementsByTagName('video').length,
+      iframeCount: document.getElementsByTagName('iframe').length,
+      windowKeys: (function() {
+        var keys = [];
+        try {
+          for (var k in window) {
+            var o;
+            try { o = window[k]; } catch (e) { continue; }
+            if (o && typeof o === 'object') {
+              if (o.levels && Array.isArray(o.levels)) keys.push(k + ':hls');
+              if (typeof o.getVariantTracks === 'function') keys.push(k + ':shaka');
+              if (typeof o.loadSource === 'function') keys.push(k + ':loadSource');
+            }
+          }
+        } catch (e) {}
+        return keys.slice(0, 10);
+      })()
+    });
+    // Install diagnostics-only network hooks only when logging is enabled.
+    installNetworkProbe();
+    }
+    if (lowQualityOn() || diagnosticEnabled) scanForBitmovin();
+  }, true);
+
+  // Bitmovin player has a quality API: getAvailableQualities(), getQuality(), setQuality()
+  // Scan for Bitmovin instances on window and in iframes.
+  function scanForBitmovin() {
+    try {
+      var bm = window.bitmovin;
+      if (bm && bm.Player) {
+        diagnostic('bitmovin_found', { source: 'window.bitmovin', version: bm.Player.version || '' });
+      }
+      var players = [];
+      try {
+        if (window.bitmovin && window.bitmovin.Player) {
+          for (var k in window) {
+            try {
+              var o = window[k];
+              if (o && typeof o === 'object' && o.getAvailableQualities) {
+                players.push({ key: k, type: 'window' });
+              }
+            } catch (e) { /* ignore */ }
+          }
+        }
+      } catch (e) { /* ignore */ }
+      var containers = document.querySelectorAll('.bitmovinplayer-container, [data-bitmovin-player]');
+      if (containers.length > 0) {
+        diagnostic('bitmovin_container', { count: containers.length, id: containers[0].id || '' });
+      }
+      var qualityBtn = document.querySelector('.bitmovin-quality-menu, [class*="quality"], .bitmovin-settings-menu, [class*="settings"]');
+      if (qualityBtn) {
+        diagnostic('bitmovin_quality_btn', {
+          tag: qualityBtn.tagName,
+          cls: (qualityBtn.className || '').substring(0, 100),
+          id: qualityBtn.id || ''
+        });
+      }
+      var playerContainer = document.querySelector('.bitmovinplayer-container');
+      if (playerContainer) {
+        var buttons = playerContainer.querySelectorAll('button, [role="button"], .bitmovin-button');
+        var btnInfo = [];
+        for (var bi = 0; bi < Math.min(buttons.length, 10); bi++) {
+          btnInfo.push({
+            tag: buttons[bi].tagName,
+            cls: (buttons[bi].className || '').substring(0, 60),
+            text: (buttons[bi].textContent || '').substring(0, 30)
+          });
+        }
+        diagnostic('bitmovin_buttons', { count: buttons.length, buttons: btnInfo });
+      }
+      trySetBitmovinQuality();
+      if (players.length > 0 || containers.length > 0) {
+        diagnostic('bitmovin_scan', { players: players.length, containers: containers.length });
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // Try to set quality by interacting with the Bitmovin player UI.
+  // Click the settings button, wait for the quality menu, then click the preferred quality.
+  function trySetBitmovinQuality() {
+    if (!lowQualityOn()) return;
+    try {
+      var settingsBtn = document.querySelector('.bmpui-ui-settingstogglebutton');
+      if (!settingsBtn) return;
+      settingsBtn.click();
+      diagnostic('bitmovin_settings_clicked', {});
+      setTimeout(function () {
+        try {
+          var qualityOptions = document.querySelectorAll('.bmpui-ui-qualityoption, [class*="quality"] [class*="option"], .bmpui-ui-settingsmenu [class*="quality"]');
+          if (qualityOptions.length > 0) {
+            diagnostic('bitmovin_quality_options', { count: qualityOptions.length });
+            var best = null;
+            var bestScore = Infinity;
+            for (var qi = 0; qi < qualityOptions.length; qi++) {
+              var opt = qualityOptions[qi];
+              var text = (opt.textContent || '').trim();
+              var m = text.match(/(\d{3,4})p?/i);
+              if (m) {
+                var h = parseInt(m[1], 10);
+                var score = 0;
+                for (var pi = 0; pi < qualityPreference.length; pi++) {
+                  var d = Math.abs(h - qualityPreference[pi]);
+                  if (d < score) score = d;
+                }
+                if (score < bestScore) { bestScore = score; best = opt; }
+              }
+            }
+            if (best) {
+              best.click();
+              diagnostic('bitmovin_quality_selected', { text: (best.textContent || '').trim() });
+            }
+          } else {
+            diagnostic('bitmovin_quality_menu_not_found', {});
+          }
+        } catch (e) { /* ignore */ }
+      }, 500);
+    } catch (e) { /* ignore */ }
+  }
+
+  // Probe network requests to understand what the MSE player downloads. COALESCED per host: a
+  // segment-heavy site (HLS/DASH) can emit thousands of per-request events in one session, which
+  // pushes other evidence out of the 2 MiB diagnostic rotation. Instead of one event per segment,
+  // aggregate per host over a 10 s window and emit a single summary (count + first/last URL +
+  // method counts). Diagnostics-only; never affects page behavior.
+  var __netAgg = {};
+  var __netAggCap = 128;
+  var __netFlushTimer = 0;
+  function netAggRecord(u, method) {
+    if (!diagnosticEnabled) return;
+    try {
+      var host = 'unknown';
+      try { host = new URL(u, location.href).host; } catch (e2) { host = 'unknown'; }
+      var now = Date.now();
+      try { if (typeof performance !== 'undefined' && performance.now) now = performance.now(); } catch (e3) {}
+      var e = __netAgg[host];
+      if (!e) {
+        var n = 0; for (var k in __netAgg) { if (__netAgg.hasOwnProperty(k)) n++; }
+        if (n >= __netAggCap) { netAggFlush(); }
+        e = __netAgg[host] = { count: 0, first: u.substring(0, 200), last: u.substring(0, 200), t0: now, t1: now, methods: {} };
+      }
+      e.count++;
+      e.last = u.substring(0, 200);
+      e.t1 = now;
+      var m = method || 'GET';
+      e.methods[m] = (e.methods[m] || 0) + 1;
+    } catch (e) { /* ignore */ }
+  }
+  function netAggFlush() {
+    try {
+      for (var host in __netAgg) {
+        if (!__netAgg.hasOwnProperty(host)) continue;
+        var e = __netAgg[host];
+        if (e && e.count > 0) {
+          diagnostic('net_segment_summary', {
+            host: host,
+            count: e.count,
+            first: e.first,
+            last: e.last,
+            windowMs: Math.round(e.t1 - e.t0),
+            methods: e.methods
+          });
+        }
+        delete __netAgg[host];
+      }
+    } catch (e) { /* ignore */ }
+  }
+  var __netProbeInstalled = false;
+  function installNetworkProbe() {
+    if (!__netProbeInstalled) {
+    __netProbeInstalled = true;
+    var origFetch = window.fetch;
+    window.fetch = function(url, opts) {
+      if (!diagnosticEnabled) return origFetch.apply(this, arguments);
+      try {
+        var u = String(url);
+        if (/\.(m3u8|m4s|ts|mp4|mpd)(\?|$)/i.test(u) || /segment|chunk|part/i.test(u)) {
+          netAggRecord(u, (opts && opts.method) || 'GET');
+        }
+      } catch (e) { /* ignore */ }
+      return origFetch.apply(this, arguments);
+    };
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function(method, url) {
+      if (!diagnosticEnabled) return origOpen.apply(this, arguments);
+      try {
+        var u = String(url);
+        if (/\.(m3u8|m4s|ts|mp4|mpd)(\?|$)/i.test(u) || /segment|chunk|part/i.test(u)) {
+          netAggRecord(u, method);
+        }
+      } catch (e) { /* ignore */ }
+      return origOpen.apply(this, arguments);
+    };
+    }
+    try { if (!__netFlushTimer) __netFlushTimer = setInterval(netAggFlush, 10000); } catch (e) { /* ignore */ }
+  }
+
+
+  // "Sandbox Not Allowed - remove sandbox attributes": the embedded players that print this do not read the
+  // sandbox attribute (they cannot, from another site). They ask whether a popup can be opened - window.open() of a
+  // blank window, then check that something came back - and call "no" a sandbox. Popup Guard makes that answer
+  // "no" on purpose (popup_guard.js returns null for every window.open() while it is ON), so inside Buccaneer the
+  // player is told it is sandboxed whether or not it is. Answer that one question: in a frame (not the top
+  // document), while Popup Guard is ON, when a call asks for a new BLANK window (no URL, '' or about:blank), hand
+  // back an inert stand-in window. Nothing opens, and the guard still counts and reports the call as before.
+  // Everything else keeps the old answer (null): a real URL, so the usual `window.open(url) || (location.href =
+  // url)` fallbacks behave exactly as before; _self/_parent/_top; noopener/noreferrer (browsers answer those with
+  // null on purpose). Not done for frames inside the poster-grid site. With Popup Guard OFF the page gets whatever
+  // the browser says.
+  function installPopupProbeDecoy() {
+    if (window.__fbPopupProbeDecoy) return;
+    var inFrame = false;
+    try { inFrame = window.top !== window; } catch (e) { inFrame = true; }
+    if (!inFrame || typeof window.open !== 'function') return;
+
+    var FLIXER_ORIGIN = /^https?:\/\/([^\/:]+\.)?flixer\.(gd|su)(:\d+)?$/i;
+    function underFlixer() {
+      try {
+        var ao = window.location.ancestorOrigins;
+        if (ao && ao.length) {
+          for (var i = 0; i < ao.length; i++) if (FLIXER_ORIGIN.test(ao[i])) return true;
+          return false;
+        }
+      } catch (e) { /* fall back to the referrer */ }
+      try {
+        var m = /^(https?:\/\/[^\/?#]+)/i.exec(document.referrer || '');
+        return !!m && FLIXER_ORIGIN.test(m[1]);
+      } catch (e) { return false; }
+    }
+    if (underFlixer()) return;
+
+    function noop() { return undefined; }
+
+    // Anything the page does to the stand-in window or its document is swallowed: reads give back more of the same,
+    // so `w.document.body.appendChild(x).style.y = 1` does not throw and stop the player's own start-up.
+    // asObject: the document itself reports typeof 'object'; everything below it is callable.
+    function sink(asObject) {
+      if (typeof Proxy !== 'function') return {};
+      var child = null;
+      var self = null;
+      self = new Proxy(asObject ? {} : function () { return self; }, {
+        get: function (t, k) {
+          if (typeof k === 'symbol' || k === 'then') return undefined;
+          if (k === 'toString' || k === 'valueOf' || k === 'toJSON') return function () { return ''; };
+          if (k === 'length') return 0;
+          if (asObject) return child || (child = sink(false));
+          return self;
+        },
+        set: function () { return true; },
+        apply: function () { return self; },
+        construct: function () { return self; },
+        has: function () { return true; }
+      });
+      return self;
+    }
+
+    function standIn() {
+      var closed = false;
+      var loc = { href: 'about:blank', assign: noop, replace: noop, reload: noop, toString: function () { return 'about:blank'; } };
+      var base = {
+        close: function () { closed = true; },
+        focus: noop, blur: noop, stop: noop, print: noop, postMessage: noop,
+        opener: window, name: '', location: loc, document: sink(true),
+        innerWidth: 400, innerHeight: 300, outerWidth: 400, outerHeight: 300, screenX: 0, screenY: 0
+      };
+      // `closed` is read on every access: false until the page closes the window itself.
+      Object.defineProperty(base, 'closed', { get: function () { return closed; }, enumerable: true });
+      if (typeof Proxy !== 'function') return base;
+      return new Proxy(base, {
+        get: function (t, k) {
+          if (k in t) return t[k];
+          if (typeof k === 'symbol' || k === 'then') return undefined;
+          return sink(false);
+        },
+        set: function (t, k, v) {
+          if (k === 'location' || k === 'closed') return true;   // assigning .location navigates nothing
+          t[k] = v;
+          return true;
+        }
+      });
+    }
+
+    // Same rule as popup_guard.js: read live from the app, ON when the bridge is missing.
+    function guardOn() {
+      try {
+        if (window.Buccaneer && typeof window.Buccaneer.isGuardEnabled === 'function') {
+          return window.Buccaneer.isGuardEnabled() !== false;
+        }
+      } catch (e) { /* bridge not ready: the guard stays on */ }
+      return true;
+    }
+
+    function blank(u) {
+      return u === undefined || u === null || u === '' || /^about:blank(?:[?#].*)?$/i.test(String(u));
+    }
+
+    // True when the call is the "can I open a new blank window?" question and nothing else.
+    function isNewBlankWindow(args) {
+      if (!blank(args[0])) return false;
+      var target = args.length > 1 && args[1] !== undefined && args[1] !== null ? String(args[1]).toLowerCase() : '';
+      if (target === '_self' || target === '_parent' || target === '_top') return false;
+      if (/(^|[\s,])no(opener|referrer)(\s*=|[\s,]|$)/i.test(args.length > 2 && args[2] ? String(args[2]) : '')) return false;
+      return true;
+    }
+
+    window.__fbPopupProbeDecoy = true;   // set only where the stand-in is really installed
+    var guarded = window.open;
+    var told = false;
+    window.open = function open(url) {
+      var w = guarded.apply(this, arguments);
+      if (w !== null && w !== undefined) return w;
+      try {
+        if (!guardOn() || !isNewBlankWindow(arguments)) return w;
+        if (!told) {
+          told = true;
+          if (diagnosticEnabled) {
+            diagnostic('popup_probe_answered', { frame: __host, page: pageOriginOf() });
+          }
+        }
+        return standIn();
+      } catch (e) { return w; }
+    };
+
+    function pageOriginOf() {
+      try {
+        var ao = window.location.ancestorOrigins;
+        if (ao && ao.length) return String(ao[ao.length - 1]).replace(/^https?:\/\//i, '').replace(/:\d+$/, '');
+      } catch (e) { /* ignore */ }
+      return '';
+    }
+  }
+
+  function diagnostic(event, data) {
+    if (!diagnosticEnabled) return;
+    try {
+      var b = window.Buccaneer;
+      if (b && typeof b.diagnosticEvent === 'function') b.diagnosticEvent(String(event), JSON.stringify(data || {}));
+    } catch (e) { /* diagnostics are best effort */ }
+  }
+
+  function mediaDescription(m) {
+    var q = null;
+    try { q = m.getVideoPlaybackQuality ? m.getVideoPlaybackQuality() : null; } catch (e) { q = null; }
+    // A later disconnected range is not playable buffer at the current position.
+    // Bound diagnostic work even for a hostile/fragmented TimeRanges object.
+    var bufferAhead = -1, bufferRanges = [], bufferRangeCount = -1;
+    var bufferRangesTruncated = false;
+    try {
+      var ranges = m.buffered, position = m.currentTime;
+      bufferRangeCount = ranges ? ranges.length : 0;
+      bufferRangesTruncated = bufferRangeCount > 32;
+      if (isFinite(position)) {
+        bufferAhead = bufferRangesTruncated ? -1 : 0;
+        for (var bi = 0; bi < Math.min(bufferRangeCount, 32); bi++) {
+          var bs = ranges.start(bi), be = ranges.end(bi);
+          if (!isFinite(bs) || !isFinite(be) || be < bs) continue;
+          bufferRanges.push([Number(bs.toFixed(2)), Number(be.toFixed(2))]);
+          if (bs <= position && position < be) bufferAhead = Math.max(0, be - position);
+        }
+      }
+    } catch (e) { bufferAhead = -1; }
+    var frameKind = 'unknown', mediaWindow = null;
+    try {
+      mediaWindow = m.ownerDocument && m.ownerDocument.defaultView;
+      if (mediaWindow && mediaWindow.top === mediaWindow) frameKind = 'top';
+      else if (mediaWindow) {
+        // Compare with the top, not with this injection's own window. A denied
+        // top read means cross-origin or an opaque sandbox, not same-origin.
+        try {
+          var ownOrigin = mediaWindow.location.origin, topOrigin = mediaWindow.top.location.origin;
+          frameKind = ownOrigin === 'null' || topOrigin === 'null' ? 'opaque' :
+            (ownOrigin === topOrigin ? 'same-origin' : 'cross-origin');
+        } catch (e) { frameKind = 'cross-origin-or-opaque'; }
+      }
+    } catch (e) { /* leave unknown */ }
+    // Diagnostic reads must not create a GL context on a page-owned canvas.
+    // getContext() is not a read-only capability check: it can allocate GPU state
+    // or lock an unused canvas to the wrong renderer. Report the state as unknown.
+    var canvasCount = 0, webgl = -1;
+    try { canvasCount = m.ownerDocument.getElementsByTagName('canvas').length; } catch (e) {}
+    var out = {
+      kind: m.tagName || 'MEDIA',
+      pageUrl: window.location.href || '',
+      topFrame: mediaWindow ? (mediaWindow.top === mediaWindow ? 1 : 0) : -1,
+      // "decoded but not displayed" is only distinguishable from a stalled decoder if we know
+      // whether this element is the one on screen and which kind of frame it lives in.
+      visible: isVisible(m) ? 1 : 0,
+      frameKind: frameKind,
+      canvasCount: canvasCount,
+      webgl: webgl,
+      src: m.currentSrc || m.src || '',
+      width: m.videoWidth || 0,
+      height: m.videoHeight || 0,
+      readyState: m.readyState,
+      networkState: m.networkState,
+      paused: m.paused ? 1 : 0,
+      muted: m.muted ? 1 : 0,
+      volume: typeof m.volume === 'number' ? Number(m.volume.toFixed(2)) : 0,
+      playbackRate: typeof m.playbackRate === 'number' ? Number(m.playbackRate.toFixed(2)) : 1,
+      currentTime: isFinite(m.currentTime) ? Number(m.currentTime.toFixed(2)) : 0,
+      duration: isFinite(m.duration) ? Number(m.duration.toFixed(2)) : 0,
+      bufferAhead: Number(bufferAhead.toFixed ? bufferAhead.toFixed(2) : bufferAhead),
+      bufferRangeCount: bufferRangeCount,
+      bufferRangesTruncated: bufferRangesTruncated ? 1 : 0,
+      bufferRanges: bufferRanges,
+      error: m.error ? (m.error.code || 0) : 0
+    };
+    if (q) {
+      out.frames = typeof q.totalVideoFrames === 'number' ? q.totalVideoFrames : -1;
+      out.dropped = typeof q.droppedVideoFrames === 'number' ? q.droppedVideoFrames : -1;
+    }
+    return out;
+  }
+
+  var geometryReported = false;
+  // Existing media events/coordination refresh the native flag in each frame.
+  // No new idle-frame bridge poll, timer, message channel or the poster-grid site instrumentation.
+  function refreshDiagnostics() {
+    var enabled = bridgeCall('isDiagnosticsEnabled');
+    if (typeof enabled === 'boolean' && enabled !== diagnosticEnabled) window.__fb.setDiagnosticLogging(enabled);
+  }
+
+  function diagnosticMediaEvent(e) {
+    refreshDiagnostics();
+    if (!diagnosticEnabled || !isMedia(e.target)) return;
+    diagnostic('media_' + e.type, mediaDescription(e.target));
+    // Report player geometry once when playback starts: the frame hosting the video
+    // reports the video rect; the top frame reports the iframe rect.
+    if (!geometryReported && e.type === 'playing') {
+      geometryReported = true;
+      try { diagnostic('player_geometry', window.__fb.playerGeometry()); } catch (x) { /* ignore */ }
+    }
+  }
+
+  function isMedia(el) {
+    return !!el && (el.tagName === 'VIDEO' || el.tagName === 'AUDIO');
+  }
+
+  function playingMedia() {
+    var list = document.querySelectorAll('video, audio');
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i].paused && !list[i].ended) out.push(list[i]);
+    }
+    return out;
+  }
+
+  // a real player: audio that is not muted, or a visible video that is not a muted background loop
+  function isRealPlayer(m) {
+    if (m.tagName === 'AUDIO') return !m.muted;
+    return isVisible(m) && !(m.muted && m.loop);
+  }
+
+  function pauseQuietly(m) {
+    try { m.pause(); } catch (e) { /* ignore */ }
+  }
+
+  document.addEventListener('play', function (e) {
+    var m = e.target;
+    if (!isMedia(m) || bridgeCall('exclusiveEnabled') !== true) return;
+    if (isRealPlayer(m)) {
+      var playing = playingMedia();
+      for (var i = 0; i < playing.length; i++) {
+        if (playing[i] !== m) pauseQuietly(playing[i]);
+      }
+      bridgeCall('mediaStarted', frameId);
+    } else if (bridgeCall('activeOwner')) {
+      pauseQuietly(m);   // hidden / background media waits while a real player is running
+    }
+  }, true);
+
+  function mediaStopped(e) {
+    if (!isMedia(e.target) || bridgeCall('exclusiveEnabled') !== true) return;
+    if (playingMedia().length === 0) bridgeCall('mediaStopped', frameId);
+  }
+  document.addEventListener('pause', mediaStopped, true);
+  document.addEventListener('ended', mediaStopped, true);
+
+  var MEDIA_DIAG_EVENTS = ['loadedmetadata', 'canplay', 'play', 'playing', 'waiting', 'stalled', 'pause', 'ended', 'error', 'emptied'];
+  for (var mdi = 0; mdi < MEDIA_DIAG_EVENTS.length; mdi++) {
+    document.addEventListener(MEDIA_DIAG_EVENTS[mdi], diagnosticMediaEvent, true);
+  }
+  document.addEventListener('playing', function () { scheduleHealthSample(); }, true);
+
+  // Opt-in health samples: enough to distinguish buffering from dropped-frame/render pressure.
+  // There is no repeating timer while diagnostics are OFF; the sample reschedules itself only
+  // while a media element is actively playing and diagnostics remain enabled.
+  var healthTimer = 0;
+  function scheduleHealthSample() {
+    if (!diagnosticEnabled || healthTimer) return;
+    healthTimer = setTimeout(function () {
+      healthTimer = 0;
+      refreshDiagnostics();
+      if (!diagnosticEnabled) return;
+      var playing = playingMedia();
+      if (playing.length === 0) return;
+      // Use the same local target selection as remote controls; do not silently
+      // attribute the first playing advertisement to a selected opaque player.
+      var target = pickTarget();
+      if (target && target.video && target.video.ownerDocument === document) {
+        var description = mediaDescription(target.video);
+        description.sampleScope = 'local-selected-player';
+        diagnostic('media_health', description);
+      }
+      scheduleHealthSample();
+    }, 3000);
+  }
+
+
+  // Cross-frame coordination cannot be event-driven (another frame only tells the app), so this
+  // is a fallback check. 2000 ms is enough: the play/pause events above handle the common case.
+  setInterval(function () {
+    var playing = playingMedia();
+    if (playing.length === 0) return;
+    if (typeof refreshDiagnostics === 'function') refreshDiagnostics();
+    if (bridgeCall('pageIsForeground') === false) {
+      for (var bg = 0; bg < playing.length; bg++) pauseQuietly(playing[bg]);
+      return;
+    }
+    for (var pi = 0; pi < playing.length; pi++) {
+      if (isRealPlayer(playing[pi])) { bridgeCall('playbackActive', documentId); break; }
+    }
+    if (playing.length === 0 || bridgeCall('exclusiveEnabled') !== true) return;
+    var owner = bridgeCall('activeOwner');
+    if (owner && owner !== frameId) {
+      for (var i = 0; i < playing.length; i++) pauseQuietly(playing[i]);
+    }
+  }, 2000);
+
+  // A real tap (not a script click) that ends with a text field focused -> tell the app.
+  document.addEventListener('click', function (e) {
+    if (!e.isTrusted) return;
+    // If the tap landed on the player iframe, forward it into the iframe: the page's own
+    // container can swallow touches that should reach the embedded player's controls.
+    try {
+      var t = e.target;
+      var f = (t && t.tagName === 'IFRAME') ? t : (t && t.closest ? t.closest('iframe') : null);
+      if (f && f.contentWindow) {
+        var r = f.getBoundingClientRect();
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+          var fx = (e.clientX - r.left) / (r.width || 1);
+          var fy = (e.clientY - r.top) / (r.height || 1);
+          var iw = f.contentWindow.innerWidth || r.width;
+          var ih = f.contentWindow.innerHeight || r.height;
+          var ev = new MouseEvent('click', {
+            bubbles: true, cancelable: true, view: f.contentWindow,
+            clientX: fx * iw, clientY: fy * ih,
+            screenX: fx * iw, screenY: fy * ih
+          });
+          var doc = f.contentDocument;
+          if (doc) {
+            var target = doc.elementFromPoint(fx * iw, fy * ih) || doc.documentElement;
+            target.dispatchEvent(ev);
+          }
+        }
+      }
+    } catch (x) { /* cross-origin: cannot forward */ }
+    if (diagnosticEnabled) {
+      try {
+        var t = e.target;
+        diagnostic('click', {
+          pageUrl: window.location.href || '',
+          topFrame: window.top === window ? 1 : 0,
+          target: t ? (t.tagName || '') + (t.id ? '#' + t.id : '') : '',
+          inPlayerUi: !!(t && t.closest && t.closest('button, [role=button], .player-controls, .control, video')) ? 1 : 0,
+          x: Math.round(e.clientX), y: Math.round(e.clientY)
+        });
+      } catch (x) { /* ignore */ }
+    }
+    setTimeout(function () {
+      try {
+        var ae = document.activeElement;
+        var ed = editableOf(ae);
+        // Only open the keypad when the tap actually landed on the field itself.
+        // Otherwise a tap on the player/video area can leave a chat box focused as a
+        // side effect and pop the keypad unexpectedly (the cross-origin player site chat, etc.).
+        var onField = false;
+        if (ed && e.target) {
+          onField = (e.target === ed) || (ed.contains && ed.contains(e.target));
+          // A label or wrapper around the field also counts as a deliberate tap on it.
+          if (!onField && e.target.closest) {
+            var lab = e.target.closest('label');
+            if (lab && lab.contains && lab.contains(ed)) onField = true;
+          }
+        }
+        if (ed && onField && window.Buccaneer &&
+            typeof window.Buccaneer.editableClicked === 'function') {
+          window.Buccaneer.editableClickedForDocument(documentId);
+        }
+      } catch (x) { /* ignore */ }
+    }, 40);
+  }, true);
+
+  if (diagnosticEnabled) {
+    try {
+      var b = window.Buccaneer;
+      if (b && typeof b.diagnosticEvent === 'function') {
+        b.diagnosticEvent('click_listener_registered', JSON.stringify({
+          url: window.location.href || '',
+          topFrame: window.top === window ? 1 : 0
+        }));
+      }
+    } catch (e) { /* ignore */ }
+  }
+})();

@@ -1,0 +1,34 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert'),acorn=require('acorn'),path=require('path');
+const source=fs.readFileSync(path.join(__dirname,'../app/src/main/assets/popup_guard.js'),'utf8');
+let target;function walk(n){if(!n||typeof n!=='object')return;if(n.type==='FunctionDeclaration'&&n.id.name==='hideMovyOpaqueAd')target=n;for(const v of Object.values(n)){if(Array.isArray(v))v.forEach(walk);else if(v&&typeof v==='object')walk(v);}}walk(acorn.parse(source,{ecmaVersion:2018}));
+assert(target,'Missing paint-safe handling for observed noninteractive opaque Movy ad root');
+const body={},frame={getAttribute:k=>k==='sandbox'?'allow-same-origin allow-scripts allow-popups allow-modals':null};
+const root={tagName:'DIV',parentElement:body,style:{},getAttribute:k=>k==='data-shb'?'1':null,querySelector:q=>q==='iframe[srcdoc]'?frame:null,getBoundingClientRect:()=>({left:0,top:0,right:960,bottom:540,width:960,height:540})};
+const html={};const context={window:{location:{hostname:'www.movy.sx'},innerWidth:960,innerHeight:540},document:{body,documentElement:html}};
+vm.createContext(context);vm.runInContext(source.slice(target.start,target.end),context);
+const s={pointerEvents:'none',display:'block',visibility:'visible',position:'fixed',zIndex:'2147483647',opacity:'1'};
+assert.strictEqual(context.hideMovyOpaqueAd(root,s),true);
+assert.strictEqual(root.style.display,'none','Click-through but opaque ad must stop painting, not only stop hit-testing');
+let cases=1;
+function noChange(change,host='www.movy.sx') {
+ const e={...root,style:{}},st={...s};context.window.location.hostname=host;change(e,st);
+ assert.strictEqual(context.hideMovyOpaqueAd(e,st),false);assert.deepStrictEqual(e.style,{});cases++;
+}
+noChange(()=>{},'notmovy.sx');noChange(()=>{},'movy.sx.evil.invalid');
+noChange(e=>e.parentElement={});noChange(e=>e.tagName='VIDEO');
+noChange(e=>e.getAttribute=()=>null);noChange(e=>e.querySelector=()=>null);
+noChange(e=>e.querySelector=q=>q==='iframe[srcdoc]'?{getAttribute:()=> 'allow-scripts'}:null);
+noChange(e=>e.querySelector=q=>q==='iframe[srcdoc]'?frame:{});
+noChange(e=>e.getBoundingClientRect=()=>({left:0,top:0,right:100,bottom:100}));
+noChange((e,st)=>st.pointerEvents='auto');noChange((e,st)=>st.position='absolute');
+noChange((e,st)=>st.opacity='0');noChange((e,st)=>st.zIndex='1000');
+noChange((e,st)=>st.zIndex='auto');noChange((e,st)=>st.opacity='unknown');
+noChange((e,st)=>st.display='none');noChange((e,st)=>st.visibility='hidden');
+context.window.location.hostname='movy.sx';root.style={};
+assert.strictEqual(context.hideMovyOpaqueAd(root,s),true);cases++;
+assert(source.includes("if (hideMovyOpaqueAd(el, s)) return;"),'Actual scanner must use the classifier before pointer-events skip');
+const htmlAd={...root,parentElement:html,style:{}};
+assert.strictEqual(context.hideMovyOpaqueAd(htmlAd,s),true,'Real ad attaches to HTML, outside BODY and player');
+assert.strictEqual(htmlAd.style.display,'none');cases++;
+console.log('PASS '+cases+' observed Movy ad paint/containment/host cases');

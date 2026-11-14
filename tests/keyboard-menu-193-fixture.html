@@ -1,0 +1,21 @@
+<!doctype html><meta charset="utf-8"><style>
+body{margin:0;height:2000px}#clip{position:absolute;top:120px;left:20px;width:220px;height:160px;overflow:hidden}#clipped{position:absolute;top:-80px;left:0;width:200px;height:500px;background:#ccc}#scaled{position:fixed;left:300px;top:0;transform:scale(.5);transform-origin:0 0}#scaleMenu{position:absolute;left:0;top:-160px;width:240px;height:640px;background:#ccc}#controlled{position:fixed;left:600px;top:-120px;width:220px;height:600px;background:#ccc}#safe{position:fixed;left:900px;top:4px;width:200px;height:200px;background:#ccc}#field{position:fixed;left:500px;top:150px}
+</style><div id="clip"><div id="clipped" role="listbox"><button>Season one</button><div style="height:800px">More seasons</div></div></div><div id="scaled"><div id="scaleMenu" role="menu"><button>First</button><div style="height:900px">More</div></div></div><button aria-expanded="true" aria-controls="controlled">Seasons</button><div id="controlled"><button>One</button><button>Two</button></div><div id="safe" role="menu">Choices</div><input id="field" value="old"><pre id="results"></pre>
+<script>window.__frame='';window.__last={};window.Buccaneer={currentDocument:()=> 'doc',activeInputFrame:()=>window.__frame,editableFocused:(f,s)=>{__frame=f;__last=JSON.parse(s)}};</script><script src="../app/src/main/assets/tv_ui.js"></script><script>
+(async()=>{let checks=[];function check(name,fn){try{checks.push({name,pass:!!fn()})}catch(e){checks.push({name,pass:false,error:String(e)})}}const wait=ms=>new Promise(r=>setTimeout(r,ms));
+__tvUi.fitMenus();
+check('menu fits inside clipping ancestor, not just screen',()=>{let r=clipped.getBoundingClientRect(),c=clip.getBoundingClientRect();return r.top>=c.top+7&&r.bottom<=c.bottom-7&&clipped.scrollHeight>clipped.clientHeight});
+check('scaled popup can recover its clipped top',()=>scaleMenu.getBoundingClientRect().top>=Math.max(12,innerHeight*.05)-2);
+check('expanded aria-controls popup gets fitted without a role',()=>controlled.getBoundingClientRect().top>=Math.max(12,innerHeight*.05)-2);
+check('menu keeps a TV-safe top inset',()=>safe.getBoundingClientRect().top>=Math.max(12,innerHeight*.05)-2);
+check('fitted clipped menu scrolls without moving the page',()=>{let r=clipped.getBoundingClientRect();return __tvUi.scrollAt(r.left+20,r.top+25,0,100)==='nested'&&clipped.scrollTop>0&&scrollY===0});
+check('menu boundary does not redirect scrolling into page',()=>{clipped.scrollTop=clipped.scrollHeight;let r=clipped.getBoundingClientRect();return __tvUi.scrollAt(r.left+20,r.top+25,0,100)==='nested'&&scrollY===0});
+check('repeated scaled menu fitting does not drift',()=>{let top=scaleMenu.getBoundingClientRect().top;__tvUi.fitMenus();__tvUi.fitMenus();return Math.abs(top-scaleMenu.getBoundingClientRect().top)<1});
+field.focus();await wait(20);let id=__last.field;field.value='actual updated value';
+check('qualified field read refreshes value without an input event',()=>JSON.parse(__tvUi.fieldState(__frame,id,0)).v==='actual updated value');
+check('qualified read refuses a different field id',()=>__tvUi.fieldState(__frame,'other',0)==='');
+field.type='password';field.value='do-not-leak';
+check('qualified password snapshot sends length but not secret',()=>{let s=JSON.parse(__tvUi.fieldState(__frame,id,0));return s.pw===1&&s.v===''&&s.length===11});
+__tvUi.restoreMenus();check('ancestor fit restores original styles',()=>clipped.style.maxHeight===''&&clipped.style.marginTop===''&&scaleMenu.style.marginTop===''&&controlled.style.marginTop==='');
+document.getElementById('results').textContent=JSON.stringify(checks);
+})();</script>
