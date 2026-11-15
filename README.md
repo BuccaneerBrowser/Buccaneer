@@ -1,4 +1,4 @@
-# Buccaneer 2.4.15
+# Buccaneer 2.5.0
 
 A lightweight web browser for Android TV, designed for remote control navigation and streaming content.
 
@@ -11,7 +11,7 @@ A lightweight web browser for Android TV, designed for remote control navigation
 - **Desktop site mode** — Request desktop versions of websites for better layouts
 - **Quality preference** — Optionally prefer lower-resolution streams (480p → 720p → 1080p)
 - **One video at a time** — Prevents multiple videos from playing simultaneously
-- **Popup guard** — Blocks ad popups and overlay ads
+- **Popup guard** — Blocks ad popups, overlay ads, and injected banner frames
 - **IPv6 preference** — Optional toggle that tries IPv6 first for new connections and falls back to IPv4 when a site has no IPv6 address
 - **Crash recovery** — Watchdog service restarts the browser after GPU crashes
 - **Keypad** — On-screen keyboard for typing in search fields and forms
@@ -79,6 +79,8 @@ Or sideload the APK to your device.
 
 ## Usage
 
+For a plain-language guide to what each menu option is good for, see [TIPS.md](TIPS.md).
+
 ### Navigation
 
 - **D-pad** — Navigate pages, menus, and interactive elements
@@ -97,10 +99,11 @@ The main menu (Menu button or long-press Back button) provides:
 5. **Bookmarks...** — Browse saved bookmarks
 6. **Address / search** — Open a search/address field
 7. **Full-screen video** — Toggle fullscreen video
-8. **Block redirects from [site]: ON/OFF** — Toggle redirect blocking for current site
-9. **Back** — Go back in history
-10. **Settings...** — Open settings
-11. **Exit browser** — Close the app
+8. **Block redirects from [site]: ON/OFF** — Toggle redirect blocking for the current site (shown only while on a site; each site remembers its own setting)
+9. **Confirm site exit: ON/OFF** — Ask before leaving the current site; choosing "No" returns to the site's home page
+10. **Back** — Go back in history
+11. **Settings...** — Open settings
+12. **Exit browser** — Close the app
 
 ### Settings
 
@@ -111,7 +114,7 @@ The main menu (Menu button or long-press Back button) provides:
 - **One video at a time** — Pause other videos when one starts
 - **Software rendering** — Use software rendering (workaround for GPU issues)
 - **Popup Guard** — Toggle popup blocking (shows blocked count)
-- **IPv6 preference** — Try IPv6 before IPv4 for new connections (default OFF)
+- **IPv6 preference** — Try IPv6 before IPv4 for new connections (default ON)
 - **Diagnostics** — Enable/disable diagnostic logging
 
 ### Bookmarks
@@ -133,8 +136,7 @@ The main menu (Menu button or long-press Back button) provides:
 Diagnostic logging is OFF by default. To enable:
 
 1. Open Settings → Diagnostics
-2. Toggle "Diagnostic logging" to ON
-3. Restart the app
+2. Toggle "Diagnostic logging" to ON — it takes effect immediately, no restart needed
 
 Diagnostics write to `files/diagnostic_session.jsonl` in the app's private storage.
 

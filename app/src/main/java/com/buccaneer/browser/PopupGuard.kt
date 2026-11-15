@@ -72,7 +72,7 @@ class PopupGuard(context: Context) {
      * navigates freely — a browser must let people click links and get places. A site the
      * user HAS protected is anchor-scoped fail-closed: only HTTP(S) destinations on the
      * anchor host or its subdomains, plus the single directed HTTPS-only migration
-     * for a known renamed domain. The master Popup Guard toggle remains the global
+     * nippleflix.com -> ghostflix.st. The master Popup Guard toggle remains the global
      * opt-out. Scheme safety (non-HTTP(S) main-frame targets) and the missing-initiator
      * fail-closed case apply regardless of protection.
      */
@@ -86,7 +86,7 @@ class PopupGuard(context: Context) {
         if (initiatorHost.isEmpty() || targetHost.isEmpty()) return true
         if (hostMatches(targetHost, initiatorHost)) return false
         if (!isProtected(initiatorHost)) return false
-        return !(initiatorHost == "nippleflix.com" && targetHost == "ghostflix.st" && scheme == "https")
+        return !(isBrandHost(initiatorHost, "nippleflix") && isBrandHost(targetHost, "ghostflix") && scheme == "https")
     }
 
     private fun hostOf(url: String): String? =
@@ -102,6 +102,17 @@ class PopupGuard(context: Context) {
 
         fun hostMatches(host: String, domain: String): Boolean =
             host == domain || host.endsWith(".$domain")
+
+        /**
+         * Brand host: the brand's apex with ANY TLD, plus any subdomain of it
+         * (flixer.gd, flixer.su, sub.flixer.xyz). Site-specific fixes follow the
+         * brand, so a mirror on a new TLD keeps the same behaviour.
+         */
+        fun isBrandHost(host: String, brand: String): Boolean {
+            val h = cleanHost(host)
+            if (h.isEmpty()) return false
+            return "^(?:.*\\.)?$brand\\.[a-z0-9-]+$".toRegex().matches(h)
+        }
 
         fun cleanHost(host: String): String =
             host.lowercase(java.util.Locale.ROOT).removeSuffix(".").removePrefix("www.")

@@ -175,9 +175,8 @@ class ImageFirewall(private val context: Context, private val guard: PopupGuard,
             return null
     }
     fun isSupportedHost(host: String): Boolean {
-        return host == "flixer.gd" || host.endsWith(".flixer.gd") ||
-            host == "flixer.su" || host.endsWith(".flixer.su") ||
-            host == "cinejoy.pk" || host.endsWith(".cinejoy.pk")
+        // Brand-scoped: any TLD/subdomain of flixer or cinejoy (mirrors rotate apexes).
+        return PopupGuard.isBrandHost(host, "flixer") || PopupGuard.isBrandHost(host, "cinejoy")
         // a poster site removed: its in-view posters didn't match the allowlist, so
         // the native 1x1 firewall blanked the home-page grid (see the image guard script).
     }

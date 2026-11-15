@@ -1,7 +1,7 @@
 /*
  * Canvas Background Guard — PowerVR crash mitigation (document start, top frame only).
  *
- * A streaming site's /search page mounts `.liquid-bg`: a full-viewport (100vw x 100vh)
+ * cinejoy.pk's /search page mounts `.liquid-bg`: a full-viewport (100vw x 100vh)
  * position:fixed, z-index:0, pointer-events:none container holding an animated <canvas>.
  * The continuously composited canvas layer crashes the PowerVR GPU driver on this Fire TV
  * (SIGSEGV in KEGLReleaseRenderTarget, RenderThread) — same crash family as the hero
@@ -39,14 +39,14 @@
   // Top frame only — see the header comment.
   if (window !== window.top) return;
 
-  // Host-scoped: the full-viewport animated canvas background is a single streaming site's feature
+  // Host-scoped: the full-viewport animated canvas background is a cinejoy.pk feature
   // (the /search page's .liquid-bg). Per the host-scoping rule, a host-specific problem
   // gets a host-scoped guard — running on every origin risks killing a canvas-based
   // player on another site whose render layer is itself full-viewport fixed
   // pointer-events:none. Same host-guard pattern as flixer_image_guard.js.
   try {
     var host = (window.location.host || '').toLowerCase();
-    if (!/(^|\.)cinejoy\.pk$/.test(host)) return;
+    if (!/(^|\.)cinejoy\.[a-z0-9-]+$/.test(host)) return;
   } catch (e) { return; }
 
   function diag(event, data) {

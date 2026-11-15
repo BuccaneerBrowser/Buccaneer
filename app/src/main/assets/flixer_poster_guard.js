@@ -25,7 +25,7 @@
   // Only act on the poster-grid site hosts.
   var __h = '';
   try { __h = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
-  if (!/(^|\.)flixer\.(gd|su)$/.test(__h)) return;
+  if (!/(^|\.)flixer\.[a-z0-9-]+$/.test(__h)) return;
 
   // Idempotency: re-evaluated on every poster-grid site page commit.
   if (window.__flixerPosterGuard) return;

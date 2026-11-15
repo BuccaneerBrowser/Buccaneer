@@ -124,7 +124,7 @@ class Regression171Test {
         call(a,"showBookmarks",null,0);assertFalse(menu.shown());assertTrue((field(a,"listPanel") as ListPanel).shown())
         c.pause().stop().destroy()
     }
-    @Test fun guardedSiteSelectSendsMouseDownUpButOtherSitesStillGetTouch() {
+    @Test fun flixerSelectSendsMouseDownUpButOtherSitesStillGetTouch() {
         val c=Robolectric.buildActivity(MainActivity::class.java).create().start().resume();val a=c.get();browse(a)
         val events=mutableListOf<MotionEvent>();val web=field(a,"webView") as WebView
         web.setOnTouchListener{_,e->events.add(MotionEvent.obtain(e));true}

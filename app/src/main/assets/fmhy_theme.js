@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var host = (location.hostname || '').toLowerCase().replace(/\.$/, '');
-  if (!/(^|\.)fmhy\.net$/.test(host)) return;
+  if (!/(^|\.)fmhy\.[a-z0-9-]+$/.test(host)) return;
   var dark;
   try { dark = !!window.Buccaneer.isDarkMode(); } catch (e) { return; }
   try {

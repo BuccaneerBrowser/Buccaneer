@@ -1,10 +1,10 @@
 /*
- * Video Layer Guard — black-video (audio-only) fix for the affected streaming host.
+ * Video Layer Guard — black-video (audio-only) fix for movy.sx.
  *
  * Symptom: the <video> element is fully healthy (readyState=4, playing, visible,
  * 853x480) but the user sees a black screen with audio. The video recovers on its
- * own after a variable interval. Diagnostic data (a ~3-minute black window)
- * shows 70 consecutive healthy media_health events with
+ * own after a variable interval. Diagnostic data (movy_black2.jsonl, 14:47:30-
+ * 14:50:58 black window) shows 70 consecutive healthy media_health events with
  * zero network errors, zero guard kills, zero render resets, and NO memory
  * pressure (black window PSS 78MB < healthy window 87MB). This is a rendering
  * issue: the video's rasterized frames are not reaching the screen.
@@ -28,11 +28,12 @@
  * data attribute). A 5s backstop re-scan covers the case where the player
  * swaps <video> elements (destroys one, creates a new one).
  *
- * Top frame only: the video lives in the top document on the affected host. Running in
+ * Top frame only: the video lives in the top document on movy.sx. Running in
  * cross-origin player iframes risks interfering with a player that manages its
  * own layers.
  *
- * Host-scoped to the affected host: the black-video issue is observed there. Per the
+ * Host-scoped to movy.* (any TLD/subdomain): the black-video issue is observed on
+ * movy.sx. Per the
  * host-scoping rule, a host-specific problem gets a host-scoped guard.
  *
  * ES5 only (Chromium 118 / API 25: no ?? or ?. operators). Never throws. No
@@ -51,10 +52,10 @@
   // Top frame only — see the header comment.
   if (window !== window.top) return;
 
-  // Host-scoped to the affected host — see the header comment.
+  // Host-scoped to movy.* — see the header comment.
   try {
     var host = (window.location.host || '').toLowerCase();
-    if (!/(^|\.)movy\.sx$/.test(host)) return;
+    if (!/(^|\.)movy\.[a-z0-9-]+$/.test(host)) return;
   } catch (e) { return; }
 
   function diag(event, data) {

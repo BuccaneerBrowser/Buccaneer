@@ -47,7 +47,9 @@ class MenuPanel @JvmOverloads constructor(context: Context, private val ui: Ui =
         list.removeAllViews()
         val buttons = ArrayList<View>()
         for (item in items) {
-            val b: Button = ui.button(item.label, 17)
+            // Side menu keeps the pre-glass flat face (owner preference, 2.5.0); every other
+            // surface uses the glass UI.
+            val b: Button = ui.flatButton(item.label, 17)
             b.minimumHeight = ui.u(44)
             b.setOnClickListener {
                 hide()

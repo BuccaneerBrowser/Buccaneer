@@ -237,7 +237,7 @@
   // The SDK ad is an HTML/BODY sibling, not inside this shell.
   function isMovyPlayerChrome(el) {
     var host = (window.location.hostname || '').toLowerCase();
-    if (host !== 'movy.sx' && host !== 'www.movy.sx') return false;
+    if (!/(^|\.)movy\.[a-z0-9-]+$/.test(host)) return false;
     var root = el.closest && el.closest('.vp-root');
     return !!(root && root.parentElement && root.parentElement.id === 'vp-shell');
   }
@@ -247,7 +247,7 @@
   // recognize ONLY this external SDK root, never player chrome/captions or descendants.
   function hideMovyOpaqueAd(el, s) {
     var host = (window.location.hostname || '').toLowerCase();
-    if (host !== 'movy.sx' && host !== 'www.movy.sx') return false;
+    if (!/(^|\.)movy\.[a-z0-9-]+$/.test(host)) return false;
     if (el.tagName !== 'DIV' || (el.parentElement !== document.body && el.parentElement !== document.documentElement) ||
         el.getAttribute('data-shb') !== '1' || s.pointerEvents !== 'none' ||
         s.position !== 'fixed' || !(Number(s.zIndex) >= 2147483646) ||
@@ -259,6 +259,108 @@
     if (!(w > 0 && h > 0 && r.left <= 0 && r.top <= 0 && r.right >= w && r.bottom >= h)) return false;
     el.style.display = 'none';
     return true;
+  }
+
+  // Embedded ad-frame killer (2026-11-15, ghostflix.st "View Now" banner): the ad
+  // injector serves its creative in a SANDBOXED SRCDOC IFRAME nested in a fixed/absolute
+  // wrapper. The iframe itself is position:static with z-index:auto, so the floating rules
+  // in inspectOverlayElement bail out before it (static elements return early), and the
+  // wrapper carries neither a z-index nor text of its own (the copy lives inside the
+  // iframe), so isHighZAd / coversViewport miss it too.
+  //
+  // Signal strength decides how far the ancestor climb may reach:
+  //   STRONG — the iframe HAS a srcdoc attribute: its document is the inline creative
+  //     itself (legitimate players load http(s) documents, see scanPlayerFrames). Any
+  //     positioned ancestor may be the ad stack.
+  //   WEAK — about:blank / data: srcs are also used by parked trackers and lazy-init
+  //     embeds, so only a SHALLOW positioned ancestor (<=2 hops from <body>, where
+  //     injectors attach) qualifies.
+  // A src-LESS iframe is NEVER docless: players often mount with no src and navigate
+  // later — killing its wrapper is the black-screen incident this guard exists to
+  // prevent (review 2026-11-15, proven fixture).
+  // pointer-events:none is NOT a skip condition here: the live injector ships the whole
+  // creative stack with pointer-events disabled (observed 2026-11-15, "Check This Out"
+  // variant, wrapper at z=2147483647) — that is how it evades the floating rules too.
+  // Interactivity is irrelevant to WHAT the frame is; only display/visibility matter.
+  // Kill the qualifying positioned ancestor (the whole ad stack), not just the iframe:
+  // the injector re-adds the iframe into the same wrapper, and the periodic rescan
+  // re-kills any re-inserted stack. Standing protections apply to the ancestor: no
+  // <video>, no real controls, not the player chain, not a player-chrome signature
+  // (2026-11-13, same regex as inspectOverlayElement), never <body> itself. Walks only
+  // the page's iframes (a handful) plus a bounded ancestor climb — no full-DOM scan,
+  // so the work budget stays far under the load that stressed the PowerVR driver.
+  var EMBED_AD_MAX_CLIMB = 8;
+  var EMBED_AD_SHALLOW_HOPS = 2;
+  var EMBED_AD_CHROME_SIG = /player[-_]?(poster|error|control|stage|wrap|container|ui)|\bvjs-|jwplayer|plyr|video-js|theatre|click[-_ ]?to[-_ ]?play/;
+  function killEmbeddedAdFrames(playerIframe, viewportArea) {
+    if (!enabled() || viewportArea <= 0) return;
+    var frames;
+    try { frames = document.getElementsByTagName('iframe'); } catch (e) { return; }
+    for (var i = 0; i < frames.length; i++) {
+      var f = frames[i];
+      var fs;
+      try { fs = getComputedStyle(f); } catch (e) { continue; }
+      if (fs.display === 'none' || fs.visibility === 'hidden') continue;
+      // NOTE: no pointer-events skip here — see the rule header. The live injector sets
+      // pointer-events:none on the whole creative stack, and skipping it would be the hole.
+      var hasSrcdoc = !!(f.hasAttribute && f.hasAttribute('srcdoc'));
+      var fsrcAttr = '';
+      try { fsrcAttr = (f.getAttribute('src') || '').toLowerCase(); } catch (e) { }
+      var weakDocless = !hasSrcdoc && (fsrcAttr === 'about:blank' || fsrcAttr.indexOf('data:') === 0);
+      if (!hasSrcdoc && !weakDocless) continue;
+      var fr;
+      try { fr = f.getBoundingClientRect(); } catch (e) { continue; }
+      if (fr.width * fr.height < 1000) continue;
+      // Climb ALL positioned ancestors (bounded), not just the nearest: an ad frame can
+      // sit in a small fixed tooltip whose own parent is the full-viewport ad root.
+      var anc = f.parentElement;
+      for (var hop = 0; anc && anc !== document.documentElement && anc !== document.body && hop < EMBED_AD_MAX_CLIMB; hop++) {
+        var as;
+        try { as = getComputedStyle(anc); } catch (e) { as = null; }
+        if (as && (as.position === 'fixed' || as.position === 'absolute')) {
+          var ar;
+          try { ar = anc.getBoundingClientRect(); } catch (e) { ar = null; }
+          if (ar) {
+            var ancVp = Math.max(0, Math.min(ar.right, window.innerWidth) - Math.max(ar.left, 0)) *
+              Math.max(0, Math.min(ar.bottom, window.innerHeight) - Math.max(ar.top, 0));
+            var qualifies = ancVp >= viewportArea * 0.3;
+            if (qualifies && weakDocless) {
+              // Weak signal: the qualifying ancestor must hang near the top of the page.
+              var hops = 0, up = anc, shallow = false;
+              while (up && up !== document.body && up !== document.documentElement) {
+                hops++;
+                if (hops > EMBED_AD_SHALLOW_HOPS) break;
+                up = up.parentElement;
+              }
+              shallow = (up === document.body);
+              qualifies = shallow;
+            }
+            if (qualifies) {
+              var ancHasVideo = false, ancHasControls = false;
+              try { ancHasVideo = !!(anc.querySelector && anc.querySelector('video')); } catch (e) { }
+              if (!ancHasVideo) {
+                try { ancHasControls = !!(anc.querySelector && anc.querySelector('button, [role="button"], input, select')); } catch (e) { }
+              }
+              var sig = '';
+              try { sig = (((typeof anc.className === 'string' ? anc.className : '') + ' ' + (anc.id || '')).toLowerCase()); } catch (e) { }
+              if (!ancHasControls && !EMBED_AD_CHROME_SIG.test(sig) && !isMovyPlayerChrome(anc) &&
+                !(playerIframe && anc.contains && anc.contains(playerIframe))) {
+                anc.style.display = 'none';
+                diagnostic('overlay_killed', {
+                  cls: (anc.className && typeof anc.className === 'string' ? anc.className : '').substring(0, 60),
+                  tag: 'IFRAME',
+                  pos: as.position,
+                  z: as.zIndex,
+                  reason: 'embedded_ad_frame'
+                });
+                break;
+              }
+            }
+          }
+        }
+        anc = anc.parentElement;
+      }
+    }
   }
 
   function killOverlays() {
@@ -310,6 +412,9 @@
     var playerIframe = null, playerArea = 0;
     var pVw = window.innerWidth || 0, pVh = window.innerHeight || 0;
     scanPlayerFrames();
+    // Embedded ad frames (docless iframes in large fixed/absolute wrappers) escape every
+    // floating rule — kill them before the main loop runs (see killEmbeddedAdFrames).
+    killEmbeddedAdFrames(playerIframe, viewportArea);
 
     // Extraction inspectOverlayElement: keep call order and work budget unchanged.
     function inspectOverlayElement(el) {
@@ -505,8 +610,69 @@
       var el = els[k];
       if (!el || el === playerIframe) continue;
       var s; try { s = window.getComputedStyle(el); } catch (e) { continue; }
-      if (s.pointerEvents === 'none') continue;
       if (s.display === 'none' || s.visibility === 'hidden') continue;
+      // Embedded ad frame (mirrors killEmbeddedAdFrames, 2026-11-15): a docless iframe
+      // (srcdoc strong / about:blank-data: weak+shallow) nested in a fixed/absolute
+      // wrapper covering a large part of the viewport. The iframe is position:static, so
+      // the floating check below would skip it. Runs BEFORE the pointer-events skip: the
+      // live injector sets pointer-events:none on the whole creative stack.
+      if (el.tagName === 'IFRAME') {
+        var cfBr;
+        try { cfBr = el.getBoundingClientRect(); } catch (e) { cfBr = null; }
+        var cfHasSrcdoc = !!(el.hasAttribute && el.hasAttribute('srcdoc'));
+        var cfSrc = '';
+        try { cfSrc = (el.getAttribute('src') || '').toLowerCase(); } catch (e) { }
+        var cfWeakDocless = !cfHasSrcdoc && (cfSrc === 'about:blank' || cfSrc.indexOf('data:') === 0);
+        if ((cfHasSrcdoc || cfWeakDocless) && cfBr && cfBr.width * cfBr.height >= 1000) {
+          var anc = el.parentElement;
+          for (var chop = 0; anc && anc !== document.documentElement && anc !== document.body && chop < EMBED_AD_MAX_CLIMB; chop++) {
+            var cs;
+            try { cs = window.getComputedStyle(anc); } catch (e) { cs = null; }
+            if (cs && (cs.position === 'fixed' || cs.position === 'absolute')) {
+              var cr;
+              try { cr = anc.getBoundingClientRect(); } catch (e) { cr = null; }
+              if (cr) {
+                var cvp = Math.max(0, Math.min(cr.right, window.innerWidth) - Math.max(cr.left, 0)) *
+                  Math.max(0, Math.min(cr.bottom, window.innerHeight) - Math.max(cr.top, 0));
+                var cqual = cvp >= viewportArea * 0.3;
+                if (cqual && cfWeakDocless) {
+                  var chops = 0, cup = anc, cshallow = false;
+                  while (cup && cup !== document.body && cup !== document.documentElement) {
+                    chops++;
+                    if (chops > EMBED_AD_SHALLOW_HOPS) break;
+                    cup = cup.parentElement;
+                  }
+                  cshallow = (cup === document.body);
+                  cqual = cshallow;
+                }
+                if (cqual) {
+                  var cvid = false, cctl = false;
+                  try { cvid = !!(anc.querySelector && anc.querySelector('video')); } catch (e) { }
+                  if (!cvid) {
+                    try { cctl = !!(anc.querySelector && anc.querySelector('button, [role="button"], input, select')); } catch (e) { }
+                  }
+                  var csig = '';
+                  try { csig = (((typeof anc.className === 'string' ? anc.className : '') + ' ' + (anc.id || '')).toLowerCase()); } catch (e) { }
+                  if (!cctl && !EMBED_AD_CHROME_SIG.test(csig) && !isMovyPlayerChrome(anc) &&
+                    !(playerIframe && anc.contains && anc.contains(playerIframe))) {
+                    anc.style.display = 'none';
+                    diagnostic('overlay_killed', {
+                      cls: (anc.className && typeof anc.className === 'string' ? anc.className : '').substring(0, 60),
+                      tag: 'IFRAME',
+                      pos: cs.position,
+                      z: cs.zIndex,
+                      reason: 'embedded_ad_frame'
+                    });
+                    continue;
+                  }
+                }
+              }
+            }
+            anc = anc.parentElement;
+          }
+        }
+      }
+      if (s.pointerEvents === 'none') continue;
       var r; try { r = el.getBoundingClientRect(); } catch (e) { continue; }
       var floating = s.position === 'fixed' || s.position === 'absolute';
       if (!floating) continue;
@@ -557,7 +723,7 @@
   }
 
   // Fast-path catcher neutralizer for the general (non-poster-grid) branch. The confirmed
-  // A site's click-catcher is a full-viewport transparent DIV (position:fixed, z=2147483647,
+  // cinejoy click-catcher is a full-viewport transparent DIV (position:fixed, z=2147483647,
   // pointer-events:auto) that the page's injector re-creates ~every 10 s; the debounced full
   // scan (scheduleScan) leaves up to a 4 s window where taps are eaten. This runs the minimal
   // element set (html/body direct children + iframes — same as killCatchers) synchronously on
@@ -615,7 +781,6 @@
       var el = els[k];
       if (!el || el === playerIframe) continue;
       var s; try { s = window.getComputedStyle(el); } catch (e) { continue; }
-      if (s.pointerEvents === 'none') continue;
       if (s.display === 'none' || s.visibility === 'hidden') continue;
       var floating = s.position === 'fixed' || s.position === 'absolute';
       if (!floating) continue;
@@ -635,14 +800,50 @@
       var hasControls = false;
       try { hasControls = !!(el.querySelector && el.querySelector('button, [role="button"], input, select')); } catch (e) { }
       if (hasControls) continue;
-      el.style.pointerEvents = 'none';
-      diagnostic('catcher_neutralized', {
-        cls: (el.className && typeof el.className === 'string' ? el.className : '').substring(0, 60),
-        tag: el.tagName,
-        pos: s.position,
-        z: s.zIndex,
-        w: Math.round(r.width), h: Math.round(r.height)
-      });
+      // Visible-creative rule (2026-11-15, QR-ad flicker): the fast path historically only
+      // disarmed taps — right for BLIND click-catchers (invisible tap-eaters), but a PAINTED
+      // creative (the QR ad: empty-src fixed iframe, z=2147483646, full viewport, opacity 0.85)
+      // stayed on screen until the debounced full scan hid it, which starves under video
+      // render load (observed: neutralized at mount, hidden 184 s later — the "QR appears and
+      // goes away" flicker). If we can POSITIVELY identify painted content — a same-origin
+      // (empty / non-http src) iframe whose document we can read and whose body has children —
+      // hide it now. Cross-origin iframes (real players, Cloudflare challenge frames) throw on
+      // contentDocument and can never match; the player is already exempted above by identity
+      // and container chain. The full scan already display:nones this exact element class via
+      // isHighZAd, so this moves a proven action earlier — no new kill semantics.
+      // NOTE: this probe deliberately runs even on already-taps-disarmed nodes (no early
+      // pointerEvents skip): the QR creative's content is injected ASYNCHRONOUSLY into the
+      // empty-src iframe, after the first pass armed taps, and content arrival fires no
+      // top-document mutation — only the 2 s backstop re-sees the node. Without the re-probe
+      // the creative would stay visible indefinitely (the original bug).
+      var action = null;
+      if (el.tagName === 'IFRAME') {
+        var esrc = '';
+        try { esrc = (el.src || '').toLowerCase(); } catch (e) { }
+        if (esrc.indexOf('http://') !== 0 && esrc.indexOf('https://') !== 0) {
+          try {
+            var cd = el.contentDocument;
+            if (cd && cd.body && cd.body.childElementCount > 0) {
+              el.style.display = 'none';
+              action = 'hidden_creative';
+            }
+          } catch (e) { }
+        }
+      }
+      if (!action && s.pointerEvents !== 'none') {
+        el.style.pointerEvents = 'none';
+        action = 'taps_disarmed';
+      }
+      if (action) {
+        diagnostic('catcher_neutralized', {
+          cls: (el.className && typeof el.className === 'string' ? el.className : '').substring(0, 60),
+          tag: el.tagName,
+          pos: s.position,
+          z: s.zIndex,
+          w: Math.round(r.width), h: Math.round(r.height),
+          action: action
+        });
+      }
     }
   }
 
@@ -655,7 +856,7 @@
   // no MutationObserver).
   var __pgHost = '';
   try { __pgHost = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
-  var __pgIsFlixer = /(^|\.)flixer\.(gd|su)$/.test(__pgHost);
+  var __pgIsFlixer = /(^|\.)flixer\.[a-z0-9-]+$/.test(__pgHost);
   if (__pgIsFlixer) {
     killCatchers();
     setInterval(killCatchers, 5000);

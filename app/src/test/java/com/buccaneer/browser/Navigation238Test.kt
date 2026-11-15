@@ -30,7 +30,11 @@ class Navigation238Test {
         assertFalse(blocked("https://www.nippleflix.com/", "https://www.ghostflix.st/watch/one"))
         assertTrue(blocked("https://nippleflix.com/", "http://ghostflix.st/"))
         assertTrue(blocked("https://nippleflix.com/", "https://ghostflix.st.attacker.test/"))
-        assertTrue(blocked("https://nippleflix.com/", "https://ad.ghostflix.st/"))
+        // Brand-scoped migration (mirrors rotate apexes): a genuine subdomain of the
+        // ghostflix zone is the same operator, so it is allowed; look-alike domains
+        // (extra labels after the brand zone) remain blocked.
+        assertFalse(blocked("https://nippleflix.com/", "https://ad.ghostflix.st/"))
+        assertTrue(blocked("https://nippleflix.com/", "https://ad.ghostflix.st.attacker.test/"))
         assertTrue(blocked("https://ghostflix.st/", "https://nippleflix.com/"))
         assertTrue(blocked("https://cinejoy.pk/", "https://ghostflix.st/"))
     }

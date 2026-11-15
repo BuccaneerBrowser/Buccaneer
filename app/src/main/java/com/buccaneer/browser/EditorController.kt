@@ -87,8 +87,8 @@ class EditorController(private val host: EditorHost, private val document: Docum
 
     /** Base tap-recency window: a field focus within this of a real tap always registers. */
     private val TAP_RECENCY_BASE_MS = 2000L
-    /** Extended band: a focus 2-5s after a tap (late-mounted search panels, e.g. some
-     *  streaming sites' icon -> panel -> input) registers only when the field is visible — a hidden
+    /** Extended band: a focus 2-5s after a tap (late-mounted search panels, e.g. cinejoy's
+     *  icon -> panel -> input) registers only when the field is visible — a hidden
      *  programmatic focus stays stray and never opens the keypad. */
     private val TAP_RECENCY_EXTENDED_MS = 5000L
     private fun tapRecencyOk(tapAge: Long, visible: Boolean): Boolean =
@@ -441,7 +441,7 @@ class EditorController(private val host: EditorHost, private val document: Docum
                     return@runOnUiThread
                 }
                 if (textMode != TextMode.PAGE && (lastTapAt <= 0 || !tapRecencyOk(tapAge, visible))) {
-                    // Late-mounted search panels (some streaming sites) focus their input seconds after the
+                    // Late-mounted search panels (e.g. cinejoy) focus their input seconds after the
                     // tap; this drop was previously silent — a diagnostic blind spot.
                     DiagnosticLog.record(context, "field_reg_drop", JSONObject()
                         .put("reason", "tap_window").put("sinceTapMs", tapAge.toString()).put("vis", if (visible) 1 else 0)

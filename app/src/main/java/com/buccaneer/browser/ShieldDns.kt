@@ -4,7 +4,7 @@ package com.buccaneer.browser
  * Minimal DNS wire-format codec + shield filter. Pure JVM — unit-testable without Android.
  *
  * Purpose: the bot-protection fleet walling the streaming aggregators tracks the home
- * IPv4. The same line's IPv6 identity is clean (verified: a full aggregator page
+ * IPv4. The same line's IPv6 identity is clean (verified 2026-11-13: full movy.sx page
  * served over IPv6 while IPv4 got the QR challenge). The shield answers DNS for the
  * fleet-fronted domains with AAAA-only when the upstream resolver returns any AAAA,
  * so the browser connects over IPv6 and the IPv4 ban stops applying.
@@ -22,18 +22,21 @@ object ShieldDns {
     /** Mirrors rotate apexes: every streamcorner.* host (main site + mirrors) is in scope. */
     const val STREAMCORNER_PREFIX = "streamcorner."
 
-    /** Fleet-fronted aggregators (the walled set). Player CDNs are NOT here. */
-    val SHIELD_SUFFIXES: List<String> = listOf(
-        "ghostflix.st", "movy.sx", "coreflix.tv",
-        "cinejoy.pk", "moviebite.org", "flixer.gd", "novahd.cc",
-        "reedstreams.link", "reedstreams.to", "fmhy.net"
+    /**
+     * Fleet-fronted aggregators (the walled set). Player CDNs are NOT here.
+     * Brand-scoped: mirrors rotate apexes, so each brand covers ANY TLD and subdomain
+     * (same rule as STREAMCORNER_PREFIX above).
+     */
+    val SHIELD_BRANDS: List<String> = listOf(
+        "ghostflix", "movy", "coreflix", "cinejoy", "moviebite",
+        "flixer", "novahd", "reedstreams", "fmhy"
     )
 
     fun isShielded(host: String): Boolean {
         val h = host.lowercase().trimEnd('.')
         if (h.isEmpty()) return false
         if (h.startsWith(STREAMCORNER_PREFIX) || h.contains(".$STREAMCORNER_PREFIX")) return true
-        return SHIELD_SUFFIXES.any { h == it || h.endsWith(".$it") }
+        return SHIELD_BRANDS.any { PopupGuard.isBrandHost(h, it) }
     }
 
     // ---------------------------------------------------------------- query side

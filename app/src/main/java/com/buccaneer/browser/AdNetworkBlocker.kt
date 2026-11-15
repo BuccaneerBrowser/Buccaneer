@@ -10,12 +10,16 @@ import java.util.Locale
 /**
  * Network-only ad-host containment (2.4.4).
  *
- * Classification rule: a host is blocked ONLY with positive evidence it serves ads
- * (auction/tracker/beacon/creative). Unverified hosts are allowed.
+ * Lineage: supersedes the REJECTED 34/2.4.1 candidate (evidence/ad34/rejected-candidate.patch),
+ * which failed D6 re-acceptance because its Tier-1 list misclassified two LEGITIMATE movie CDNs:
+ *   - moon.goldenkite.top serves Movy HLS manifests/subtitles/thumbnails (23x media_manifest_request,
+ *     2026-11-10 session; SOL-REPORT-ad-layer.md).
+ *   - stormhive.top is referenced by the movie's #EXT-X-MAP (same report).
+ *
+ * Classification rule (per webview-ad-block-verification skill): a host is blocked ONLY with
+ * positive evidence it serves ads (auction/tracker/beacon/creative). Unverified hosts are allowed.
  * Exemptions below are mechanical: they are evaluated BEFORE any block rule, so a future list
- * edit cannot silently re-block verified movie CDNs. An earlier block-list revision
- * misclassified two legitimate movie CDNs (HLS manifest/subtitle/segment hosts) and broke
- * playback; they remain exempt here.
+ * edit cannot silently re-block verified movie CDNs (the exact 2.4.1 failure mode).
  *
  * Runs on WebView's IO thread. No WebView/DOM/UI access, no outgoing network IO.
  * Do not broaden shared platforms (workers.dev, googleapis, Cloudflare, Amazon media) to parents.
@@ -24,7 +28,7 @@ object AdNetworkBlocker {
 
     /** Verified-legitimate hosts, exempt from ALL block rules (evaluated first). */
     private val exemptHosts = setOf(
-            "goldenkite.top",   // movie HLS/subtitles/thumbnails CDN
+            "goldenkite.top",   // moon.goldenkite.top = Movy HLS/subtitles/thumbnails CDN
             "stormhive.top"     // movie #EXT-X-MAP segment host
     )
 
@@ -58,8 +62,8 @@ object AdNetworkBlocker {
             "amazon-adsystem.com",
             "adtrafficquality.google",
             "flashtalking.com",
-            "push-sdk.com",      // push-adware SDK (detected via console errors)
-            "hillscodger.qpon"   // adware popup apex (detected via blocked-popup diagnostics)
+            "push-sdk.com",      // push-adware SDK (console "[ra] push is not supported", 2026-11-12)
+            "hillscodger.qpon"   // adware popup apex (popup_blocked jp.hillscodger.qpon, 2026-11-12)
     )
 
     /** Verified ad hosts, exact only (never broadened to sibling/shared domains). */

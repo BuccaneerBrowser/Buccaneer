@@ -1,15 +1,15 @@
 [
  {
   "path": "app/src/main/assets/flixer_image_guard.js",
-  "sha256": "3254bc508da0cb22fdbb5900ab339d1e44f5b4a676f25d12d09da8c742058791"
+  "sha256": "25021f9821d51bc9f3532f16a10d683504529a6d48ee74aa2b29eeb5f4eeab93"
  },
  {
   "path": "app/src/main/assets/popup_guard.js",
-  "sha256": "230e2ca34afdda04d51a9850664918ecb788956269a50fef9eaca06ea48bb066"
+  "sha256": "9953cbf4524576eb1b1f066cc3489677c51b088ed55b61976fbc88058a07fffc"
  },
  {
   "path": "app/src/main/assets/page_helpers.js",
-  "sha256": "96c0caba3f9797aec78e36a8d116fa27c64bf093ba50dd95ce9e564c98f80af7"
+  "sha256": "a6ca869d5aed8f80cede6336dfedc88e7649e97939483d83b8aa13d9b8130920"
  },
  {
   "path": "app/src/main/java/com/buccaneer/browser/MainActivity.kt",

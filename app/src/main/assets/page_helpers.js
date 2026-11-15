@@ -18,7 +18,7 @@
   // site's intro animation. Only the passive __fb API (video controls, typing) is exposed here.
   var __host = '';
   try { __host = (window.location.hostname || '').toLowerCase().replace(/\.$/, ''); } catch (e) {}
-  var __isFlixer = /(^|\.)flixer\.(gd|su)$/.test(__host);
+  var __isFlixer = /(^|\.)flixer\.[a-z0-9-]+$/.test(__host);
   var __isStreamCorner = /(^|\.)streamcorner\.[a-z0-9-]+$/.test(__host);
 
   // ReedStreams' rotating players use an intentionally invalid hidden PDF as a
@@ -32,7 +32,7 @@
       var ancestors = window.location.ancestorOrigins;
       var reedPlayer = false;
       for (var i = 0; ancestors && i < ancestors.length; i++) {
-        if (/^https:\/\/([a-z0-9-]+\.)*reedstreams\.(to|st|link)(?::\d+)?$/i.test(ancestors[i])) {
+        if (/^https:\/\/([a-z0-9-]+\.)?reedstreams\.[a-z0-9-]+(?::\d+)?$/i.test(ancestors[i])) {
           reedPlayer = true;
           break;
         }
@@ -54,8 +54,8 @@
   // or changes to the StreamCorner/other-site instrumentation paths.
   (function installReedBudgetSource() {
     try {
-      var reedOrigin = /^https:\/\/([a-z0-9-]+\.)*reedstreams\.(to|st|link)(?::\d+)?$/i;
-      var reedHost = /(^|\.)reedstreams\.(to|st|link)$/.test(__host);
+      var reedOrigin = /^https:\/\/([a-z0-9-]+\.)?reedstreams\.[a-z0-9-]+(?::\d+)?$/i;
+      var reedHost = /(^|\.)reedstreams\.[a-z0-9-]+$/.test(__host);
       var matchPath = /^\/watch\/(new-york-knicks-vs-indiana-pacers|milwaukee-bucks-vs-orlando-magic)\/?$/;
       if (window.top === window && reedHost && window.location.protocol === 'https:') {
         var preferredPath = '';
@@ -296,7 +296,7 @@
   var lastFrameState = null; // { at: ms, state: {...} } — newest state a player frame reported
 
   function frameIsFlixer(frame) {
-    try { return /(^|\.)flixer\.(gd|su)$/.test(((frame.src || '').split('/')[2] || '').toLowerCase()); } catch (e) { return false; }
+    try { return /(^|\.)flixer\.[a-z0-9-]+$/.test(((frame.src || '').split('/')[2] || '').toLowerCase()); } catch (e) { return false; }
   }
 
   function forwardToFrame(frame, cmd, arg) {
@@ -658,7 +658,7 @@
   }
 
   // Entering CSS fullscreen resizes the player container (or the iframe holding the player) to
-  // fill the viewport; on some players (in a cross-origin iframe) that resize
+  // fill the viewport; on some players (notably vidbolt in a cross-origin iframe) that resize
   // pauses the video. If it was playing, watch ~2.5 s and resume it — the short window means a
   // deliberate user pause is never fought. No-op in ancestor frames (no <video> reachable there).
   function installFsResumeGuard(el) {

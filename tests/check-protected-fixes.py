@@ -39,7 +39,7 @@ assert 'private fun isImageGuardedHost(host: String) = imageFirewall.isSupported
 assert 'imageFirewall.intercept(r)' in activity
 assert 'imageFirewall.onCommittedHost(host)' in activity
 assert 'imageFirewall.updateAllowlist(urls)' in activity
-assert 'host == \"cinejoy.pk\"' in firewall
+assert 'PopupGuard.isBrandHost(host, "flixer") || PopupGuard.isBrandHost(host, "cinejoy")' in firewall
 assert 'if (r != null && active)' in firewall
 assert 'if (allowlist.contains(url))' in firewall
 assert 'private val TRANSPARENT_PIXEL_PNG_1X1: ByteArray by lazy' in firewall

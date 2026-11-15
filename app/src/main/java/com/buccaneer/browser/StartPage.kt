@@ -51,7 +51,7 @@ class StartPage @JvmOverloads constructor(
 
     init {
         visibility = View.GONE
-        setBackgroundColor(Colors.BG)
+        background = ui.screenBackground()
         content.orientation = LinearLayout.VERTICAL
         content.gravity = Gravity.CENTER_HORIZONTAL
         content.setPadding(ui.u(40), ui.u(26), ui.u(40), ui.u(16))
@@ -119,7 +119,7 @@ class StartPage @JvmOverloads constructor(
         val logo = ImageView(context)
         logo.setImageResource(R.drawable.buccaneer_logo)
         logo.scaleType = ImageView.ScaleType.FIT_CENTER
-        val lslp = LinearLayout.LayoutParams(ui.u(36), ui.u(36))
+        val lslp = LinearLayout.LayoutParams(ui.u(44), ui.u(44))
         header.addView(logo, lslp)
 
         val tagRight = ui.text("Under me bucc'n hat!", 15, Colors.SUBTLE)
@@ -154,7 +154,7 @@ class StartPage @JvmOverloads constructor(
             for (b in entries.subList(pageIndex * MAX_TILES, minOf((pageIndex + 1) * MAX_TILES, total))) tiles.add(bookmarkTile(b))
         }
 
-        val sub = ui.text(subtitle, 17, Colors.MUTED)
+        val sub = ui.text(subtitle, 17, Colors.CREAM)
         sub.gravity = Gravity.CENTER_HORIZONTAL
         sub.maxLines = 1
         sub.ellipsize = android.text.TextUtils.TruncateAt.END
@@ -178,30 +178,31 @@ class StartPage @JvmOverloads constructor(
         }
 
         if (total > MAX_TILES) {
+            val smallPad = ui.padFor(GlassDrawable.KIND_SMALL)
             val pager = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER
             }
             fun arrow(label: String, description: String, enabled: Boolean, delta: Int) {
-                val button = ui.smallButton(label)
+                val button = ui.smallButton(label, true)
                 button.contentDescription = description
                 button.isEnabled = enabled
                 button.isFocusable = enabled
-                button.alpha = if (enabled) 1f else 0.3f
+                button.alpha = if (enabled) 1f else 0.45f
                 button.setOnClickListener {
                     pageIndex = (pageIndex + delta).coerceIn(0, lastPage(total))
                     render()
                     focusFirst()
                 }
-                pager.addView(button, LinearLayout.LayoutParams(ui.u(64), ui.u(34)))
+                pager.addView(button, LinearLayout.LayoutParams(ui.u(64) + 2 * smallPad, ui.u(34) + 2 * smallPad))
             }
             arrow("◀", "Previous bookmark page", pageIndex > 0, -1)
             val counter = ui.text("${pageIndex + 1} / ${lastPage(total) + 1}", 15, Colors.SUBTLE)
             counter.gravity = Gravity.CENTER
-            pager.addView(counter, LinearLayout.LayoutParams(ui.u(120), ui.u(34)))
+            pager.addView(counter, LinearLayout.LayoutParams(ui.u(120), ui.u(34) + 2 * smallPad))
             arrow("▶", "Next bookmark page", pageIndex < lastPage(total), 1)
             val pagerLp = LinearLayout.LayoutParams(WRAP, WRAP)
-            pagerLp.topMargin = ui.u(10)
+            pagerLp.topMargin = Math.max(0, ui.u(10) - smallPad)
             content.addView(pager, pagerLp)
         }
 
@@ -210,12 +211,14 @@ class StartPage @JvmOverloads constructor(
         bar.orientation = LinearLayout.HORIZONTAL
         bar.gravity = Gravity.CENTER
 
+        val buttonPad = ui.padFor(GlassDrawable.KIND_BUTTON)
+
         fun addButton(label: String, action: () -> Unit) {
-            val b = ui.button(label, 16)
+            val b = ui.button(label, 16, true)
             b.gravity = Gravity.CENTER
             b.setOnClickListener { action() }
-            val lp = LinearLayout.LayoutParams(ui.u(230), ui.u(46))
-            if (bar.childCount > 0) lp.leftMargin = ui.u(12)
+            val lp = LinearLayout.LayoutParams(ui.u(230) + 2 * buttonPad, ui.u(46) + 2 * buttonPad)
+            if (bar.childCount > 0) lp.leftMargin = Math.max(0, ui.u(12) - 2 * buttonPad)
             bar.addView(b, lp)
             if (firstFocusable == null) firstFocusable = b
         }
@@ -229,7 +232,7 @@ class StartPage @JvmOverloads constructor(
         }
 
         val blp = LinearLayout.LayoutParams(WRAP, WRAP)
-        blp.topMargin = ui.u(if (total > MAX_TILES) 10 else 22)
+        blp.topMargin = Math.max(0, ui.u(if (total > MAX_TILES) 10 else 22) - buttonPad)
         content.addView(bar, blp)
 
         val hint = ui.text(
@@ -249,10 +252,12 @@ class StartPage @JvmOverloads constructor(
     }
 
     private fun addGrid(tiles: List<View>, reserveTwoRows: Boolean) {
-        val cols = 5
-        val gap = ui.u(12)
-        val tileW = Math.min(ui.u(190), (ui.screenW - ui.u(80) - gap * (cols - 1)) / cols)
-        val tileH = ui.u(104)
+        val cols = COLS
+        // Every tile is a glass slab inside a cell that also holds the room it needs to lift and
+        // glow when selected, so neighbouring cells touch and the visible gap comes from that room.
+        val cell = cellDims()
+        val cellW = cell[0]
+        val cellH = cell[1]
         val rows = if (reserveTwoRows) 2 else (tiles.size + cols - 1) / cols
         for (rowIndex in 0 until rows) {
             val row = LinearLayout(context)
@@ -265,19 +270,26 @@ class StartPage @JvmOverloads constructor(
                     isFocusable = false
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 }
-                val lp = LinearLayout.LayoutParams(tileW, tileH)
-                if (column > 0) lp.leftMargin = gap
-                row.addView(tile, lp)
+                row.addView(tile, LinearLayout.LayoutParams(cellW, cellH))
             }
-            val rlp = LinearLayout.LayoutParams(WRAP, tileH)
-            rlp.topMargin = gap
+            val rlp = LinearLayout.LayoutParams(WRAP, cellH)
+            rlp.topMargin = if (rowIndex == 0) ui.u(5) else 0
             content.addView(row, rlp)
         }
         if (firstFocusable == null && tiles.isNotEmpty()) firstFocusable = tiles[0]
     }
 
+    /** Sole source of start-page cell dimensions (consumed by addGrid and the tile builders). */
+    private fun cellDims(): IntArray {
+        val pad = ui.padFor(GlassDrawable.KIND_TILE)
+        val cellW = Math.min(ui.u(190) + 2 * pad, (ui.screenW - ui.u(80)) / COLS)
+        val cellH = ui.u(104) + 2 * pad
+        return intArrayOf(cellW, cellH)
+    }
+
     private fun bookmarkTile(b: Bookmark): View {
-        val t = ui.tile(b.title, BookmarkStore.hostOf(b.url), 30, 15)
+        val cell = cellDims()
+        val t = ui.tile(b.title, BookmarkStore.hostOf(b.url), 30, 15, lifted = true, boxW = cell[0], boxH = cell[1])
         t.setOnClickListener { listener?.openUrl(b.url) }
         return t
     }
@@ -285,7 +297,8 @@ class StartPage @JvmOverloads constructor(
     private fun folderTile(info: FolderInfo): View {
         val label = if (info.name.isEmpty()) "Unsorted" else info.name
         val count = if (info.count == 1) "1 bookmark" else "${info.count} bookmarks"
-        val t = ui.tile(label, count, 30, 15)
+        val cell = cellDims()
+        val t = ui.tile(label, count, 30, 15, lifted = true, boxW = cell[0], boxH = cell[1])
         t.setOnClickListener {
             folderListPage = pageIndex
             folder = info.name
@@ -298,6 +311,7 @@ class StartPage @JvmOverloads constructor(
 
     companion object {
         private const val MAX_TILES = 10
+        private const val COLS = 5
         private fun lastPage(total: Int): Int = if (total <= 0) 0 else (total - 1) / MAX_TILES
     }
 }

@@ -35,7 +35,7 @@
   // the process dies), so it sits BEFORE the idempotency guard below.
   try {
     var __h = (location.host || '').toLowerCase();
-    if (/(^|\.)flixer\.(gd|su)$/.test(__h)) {
+    if (/(^|\.)flixer\.[a-z0-9-]+$/.test(__h)) {
       sessionStorage.setItem('hasShownIntro', 'true');
     }
   } catch (e) { /* never throw */ }
@@ -45,16 +45,16 @@
   window.__flixerImgGuard = true;
 
   try {
-    // Guarded hosts only: the two guarded poster hosts (see the host regex below).
-    // (A third poster site was removed: its in-view
-    // posters didn't match the allowlist, so the 1x1 firewall blanked its grid.)
+    // Guarded hosts only: flixer.* and cinejoy.* (any TLD/subdomain — mirrors rotate
+    // apexes). (A third poster site was removed: its in-view posters didn't match the
+    // allowlist, so the 1x1 firewall blanked its grid.)
     var host = (location.host || '').toLowerCase();
-    if (!/(^|\.)flixer\.(gd|su)$|(^|\.)cinejoy\.pk$/.test(host)) { return; }
+    if (!/(^|\.)flixer\.[a-z0-9-]+$|(^|\.)cinejoy\.[a-z0-9-]+$/.test(host)) { return; }
 
     // PowerVR info-view mitigation: remove only backdrop render passes inside
     // Flixer's existing details overlay. Static CSS follows SPA replacements;
     // it adds no DOM walk, scroll handler, timer, image or player mutation.
-    if (/(^|\.)flixer\.(gd|su)$/.test(host)) {
+    if (/(^|\.)flixer\.[a-z0-9-]+$/.test(host)) {
       function installInfoGpuStyle() {
         if (document.getElementById('__bkInfoGpuStyle')) { return; }
         var parent = document.head || document.documentElement;
@@ -197,8 +197,7 @@
     function findInfoOverlay() {
       try {
         var h = (location.hostname || '').toLowerCase();
-        var isFlixer = (h === 'flixer.gd' || h.indexOf('.flixer.gd') !== -1 ||
-                        h === 'flixer.su' || h.indexOf('.flixer.su') !== -1);
+        var isFlixer = /(^|\.)flixer\.[a-z0-9-]+$/.test(h);
         if (!isFlixer) { return null; }
         if (window !== window.top) { return null; } // top document only
         return document.querySelector('div.fixed.inset-0[class*="z-[100]"]');

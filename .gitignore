@@ -12,6 +12,7 @@ CHANGELOG.md
 # All markdown docs are private dev references — never publish
 *.md
 !README.md
+!TIPS.md
 
 # Flixer review work product + release archives (local working files, never push)
 flixer/

@@ -39,6 +39,10 @@ class BrowserSettings(private val host: SettingsHost): SettingsHost by host {
     var softwareRendering=false; private set
     fun loadGeneral() {
         darkMode=prefs.getBoolean("darkMode",true)
+        // Default: desktop-layout UA (shipped behavior since 2.4.x). The mobile-UA
+        // default broke movy.sx playback: its SPA rewrites the viewport meta to a
+        // 1280-wide layout on a mobile identity, clipping the player off-screen on
+        // the 960px window. Device-native UA remains available behind the toggle.
         desktopSite=prefs.getBoolean("desktopSite",true)
         autoplay=prefs.getBoolean("autoplay",true)
         lowQuality=prefs.getBoolean("lowQuality",true)
@@ -153,8 +157,8 @@ class BrowserSettings(private val host: SettingsHost): SettingsHost by host {
         prefs.edit().putBoolean("softwareRendering", softwareRendering).apply()
         // Save the current URL so onCreate can restore it after the WebView is recreated.
         val url = lastPageUrl
-        if (!softwareRendering && (try { val h = Uri.parse(url).host?.lowercase(Locale.ROOT)?.removeSuffix(".") ?: ""; h == "flixer.gd" || h.endsWith(".flixer.gd") || h == "flixer.su" || h.endsWith(".flixer.su") } catch (_: Exception) { false })) {
-            toast("Turning OFF on this site will crash - navigate away first")
+        if (!softwareRendering && (try { val h = Uri.parse(url).host?.lowercase(Locale.ROOT)?.removeSuffix(".") ?: ""; PopupGuard.isBrandHost(h, "flixer") } catch (_: Exception) { false })) {
+            toast("Turning OFF on flixer will crash - navigate away first")
             // Don't recreate; let the user navigate away first.
             softwareRendering = true  // revert
             prefs.edit().putBoolean("softwareRendering", true).apply()

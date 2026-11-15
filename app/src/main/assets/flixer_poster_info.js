@@ -1,6 +1,6 @@
 /*
  * Flixer poster -> info page. DOCUMENT-START script, all origins (self-gates
- * to the guarded poster hosts below). Wired in MainActivity.installScripts().
+ * to flixer.* below). Wired in MainActivity.installScripts().
  *
  * WHY: on the TV a poster click is a silent no-op in the site's desktop path,
  * and the hover popup that briefly appears is too short-lived to navigate.
@@ -18,8 +18,7 @@
   window.__flixerPosterInfo = true;
   try {
     var host = (location.host || '').toLowerCase();
-    if (!(host === 'flixer.gd' || host.indexOf('.flixer.gd') !== -1 ||
-          host === 'flixer.su' || host.indexOf('.flixer.su') !== -1)) { return; }
+    if (!/(^|\.)flixer\.[a-z0-9-]+$/.test(host)) { return; }
 
     var lastAction = 0;
 

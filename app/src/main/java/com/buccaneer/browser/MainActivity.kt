@@ -410,15 +410,14 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
     private var lastPageUrl = ""
     private var mainProcessConnection: ServiceConnection? = null
     private var pageStartedAt = 0L
-    private var defaultUa = ""
-    private var desktopUa = ""
+    private lateinit var uaPolicy: UserAgentPolicy
     private var pendingClearHistory = false
     private var deferredNavigation: (() -> Unit)? = null
     private var crashReloadCount = 0
     // ---- site-anchor guard (docs/firetv-guard-plan.md, Revision 11) ----
     // anchorUrl is the single navigation authority: the URL of the last explicit native
     // action (address bar, bookmark, history, reload, restore/watchdog) or the directed
-    // domain migration observed on an allowed page start. It is
+    // nippleflix.com -> ghostflix.st migration observed on an allowed page start. It is
     // NEVER sourced from WebView.url. The guard allows only HTTP(S) destinations on the
     // anchor host/subdomains (plus that one directed migration); everything else is
     // blocked at every native entry point (shouldOverrideUrlLoading, page start,
@@ -808,8 +807,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         s.allowFileAccess = false
         s.allowContentAccess = false
 
-        defaultUa = s.userAgentString
-        desktopUa = buildDesktopUa(defaultUa)
+        uaPolicy = UserAgentPolicy(s)
+        uaPolicy.initialize(s.userAgentString)
         applyUserAgent()
         applyDarkMode()
         DiagnosticLog.record(this, "webview_config", JSONObject().apply {
@@ -862,27 +861,27 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
                 // visible posters get real textures, off-screen ones get 1x1 pixels from
                 // shouldInterceptRequest. Self-guarding and idempotent, so all origins is safe.
                 WebViewCompat.addDocumentStartJavaScript(webView, flixerImageGuardJs, origins)
-                // Poster -> info page: on the TV a poster click is a silent no-op in the
+                // Flixer poster -> info page: on the TV a poster click is a silent no-op in the
                 // site's desktop path and the hover popup is too short-lived to navigate. When
                 // the user activates a poster card, ensure the popup is up and click its "i"
                 // (More Info) button — the site's own control that opens the show info view
                 // (season/episode selectable). Deliberately simple: no screen-size spoofing,
-                // no layout involvement. Self-gated to the guarded poster hosts, idempotent.
+                // no layout involvement. Self-gated to flixer.gd/flixer.su, idempotent.
                 WebViewCompat.addDocumentStartJavaScript(webView, flixerPosterInfoJs, origins)
                 // Scroll restore: some SPA portals scrollTo(0,0) when hydration completes, yanking the
                 // user back to the top. Document start (all origins) so it captures the native scrollTo
                 // before any page script. Self-guarding and idempotent, safe on every page.
                 WebViewCompat.addDocumentStartJavaScript(webView, scrollRestoreJs, origins)
                 // Canvas background guard: mitigation for the PowerVR crash on pages that mount a
-                // full-viewport animated <canvas> background (a site's /search .liquid-bg —
+                // full-viewport animated <canvas> background (cinejoy /search's .liquid-bg —
                 // SIGSEGV in KEGLReleaseRenderTarget). Top frame only; kills the decorative
                 // background (display:none + 1x1 canvas collapse) as it mounts, with a 1500ms
                 // backstop poll. Self-guarding and idempotent, safe on every page.
                 WebViewCompat.addDocumentStartJavaScript(webView, canvasBgGuardJs, origins)
-                // Video layer guard: black-video (audio-only) fix for the affected host. Promotes the
+                // Video layer guard: black-video (audio-only) fix for movy.sx. Promotes the
                 // <video> element to its own compositor layer (will-change:transform) so the
                 // PowerVR GPU keeps its raster alive under sustained load. Top frame only;
-                // host-scoped; idempotent, safe on every page.
+                // host-scoped to movy.sx; idempotent, safe on every page.
                 WebViewCompat.addDocumentStartJavaScript(webView, videoLayerGuardJs, origins)
                 scriptsAtDocumentStart = true
                 // An optional UI/theme failure must never prevent the poster-grid site's intro fix.
@@ -930,16 +929,8 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         // Flixer's PowerVR GPU (SIGSEGV in KEGLReleaseRenderTarget). Do NOT add style injection here.
     }
 
-    private fun buildDesktopUa(ua: String): String {
-        val match = Regex("Chrome/([0-9.]+)").find(ua)
-        val version = match?.groupValues?.get(1) ?: "120.0.0.0"
-        // Desktop-layout UA for the Desktop site setting: changes the reported identity only;
-        // it does not turn Android WebView into desktop Chrome.
-        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$version Safari/537.36"
-    }
-
     private fun applyUserAgent() {
-        webView.settings.userAgentString = if (desktopSite) desktopUa else defaultUa
+        uaPolicy.apply(desktopSite)
     }
 
     /**
@@ -1033,7 +1024,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             // Directed content migration: advance the anchor exactly once, HTTPS only.
             val sourceHost = try { PopupGuard.cleanHost(Uri.parse(anchorUrl.orEmpty()).host.orEmpty()) } catch (_: Exception) { "" }
             val targetScheme = target.scheme?.lowercase(Locale.ROOT)
-            if (sourceHost == "nippleflix.com" && PopupGuard.cleanHost(target.host.orEmpty()) == "ghostflix.st" && targetScheme == "https")
+            if (PopupGuard.isBrandHost(sourceHost, "nippleflix") && PopupGuard.isBrandHost(PopupGuard.cleanHost(target.host.orEmpty()), "ghostflix") && targetScheme == "https")
                 anchorUrl = url
             cachedPageUrl = url
             finishPendingTap(cancel = true)
@@ -1083,7 +1074,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
             try { view?.evaluateJavascript(fmhyThemeJs, null) } catch (_: Throwable) {}
             // Detect guarded poster-grid page: activate TMDB image firewall.
             val host = try { Uri.parse(url ?: "").host?.lowercase(Locale.US)?.removeSuffix(".") ?: "" } catch (_: Throwable) { "" }
-            val isFlixer = host == "flixer.gd" || host.endsWith(".flixer.gd") || host == "flixer.su" || host.endsWith(".flixer.su")
+            val isFlixer = PopupGuard.isBrandHost(host, "flixer")
             val isImageGuarded = isImageGuardedHost(host)
             imageFirewall.onCommittedHost(host)
             if (isFlixer != onFlixerPage) {
@@ -2734,7 +2725,7 @@ class MainActivity : Activity(), BookmarkJobs.Listener {
         sb.append("Device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
         sb.append(", Android ").append(Build.VERSION.RELEASE)
         sb.append(" (API ").append(Build.VERSION.SDK_INT).append(")\n")
-        val chrome = Regex("Chrome/([0-9.]+)").find(defaultUa)?.groupValues?.get(1) ?: "unknown"
+        val chrome = uaPolicy.chromeVersion()
         sb.append("Web engine: Chrome ").append(chrome).append('\n')
         val provider = try { WebViewCompat.getCurrentWebViewPackage(this) } catch (_: Throwable) { null }
         sb.append("WebView provider: ")
