@@ -61,6 +61,8 @@ Blocks pop-up windows and intrusive overlay ads. Recommended **ON**.
 
 Some streaming sites sit behind bot protection that blocks the home address on the older network path (IPv4); the newer path (IPv6) is usually not blocked. With this **ON**, the browser connects to those sites over IPv6 when the site has an IPv6 address, and falls back to the normal path automatically when it does not — it can never be worse than having it off.
 
+If you use your own VPN service, turn this **OFF** — it keeps your traffic on the VPN's IPv4 connection.
+
 ## Bookmarks
 
 Bookmarks can be exported to — and imported from — the TV's public **Downloads** folder (path: `storage/emulated/0/Downloads`), the same Downloads folder any file manager on the TV shows. How the file is named and found depends on the device's Android version:
